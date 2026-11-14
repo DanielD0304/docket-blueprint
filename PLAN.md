@@ -335,3 +335,32 @@ Other TODOs from the scaffold: context caching for the case brief, LLM anchor pr
 2. ~~Which demo case~~ → Atlas Air 3591 (see §8).
 3. Event length → which cut line.
 4. Agent framework: plain `asyncio` orchestrator (recommended: transparent, fast to debug) vs Google ADK if judges reward its use.
+
+## 13. Investigator team and evidence graph — implementation goals
+
+Status: planned; the existing single investigator remains the baseline. New report schemas are in progress. This section describes intended behavior, not completed capabilities.
+
+### Analysis goals
+
+- Run three specialists concurrently: flight sequence and timing; aircraft systems and recorder consistency; crew performance, training and organizational context.
+- Give each specialist independent evidence retrieval and require cited findings, contrary evidence and unresolved questions. Search hits alone do not establish a finding; agents should open the underlying evidence and relevant source pages.
+- Run a challenger after the specialists to examine competing explanations and identify unsupported causal jumps, source disagreements and gaps.
+- Have a lead investigator reconcile the reports and produce an explicit overall conclusion: strongest supported explanation, evidence supporting it, alternatives considered, remaining uncertainty and limitations.
+- Keep arithmetic and recorder analysis in deterministic tools. Admit findings and causal edges only when their evidence was actually retrieved and carries valid citations.
+- Use a bounded budget, initially up to 25 model turns across the team, with visible per-agent usage and coverage. A budget limit or missing evidence must yield a qualified, visibly incomplete result.
+
+### Interface goals
+
+- Replace the dense activity list with a graph showing sources and evidence on the left, agents and tool actions in the middle, and findings, hypotheses and the conclusion on the right.
+- Animate nodes and links from persisted activity events so viewers can replay actual reads, tool calls and evidence handoffs. Do not invent actions or display private model reasoning.
+- Make every evidence node inspectable with its quote and source location; connect result nodes only to the evidence actually used.
+- Give hypotheses a readable comparison view with a short explanation, supporting evidence, challenges, context and open questions. Avoid duplicate inspector panels that squeeze the graph.
+
+### Completion criteria
+
+- A rerun starts from the existing immutable base extractions in a new case, preserving prior results and avoiding extraction charges.
+- Each specialist has a recorded status and cited report; the challenger and lead receive traceable evidence handoffs.
+- The final report contains a cited overall conclusion or clearly explains why no supported conclusion was reached.
+- Coverage reports distinguish available sources, inspected evidence, opened pages and recorder checks; they do not imply exhaustive review.
+- The activity graph replays saved events without additional model calls, and hypotheses remain understandable even when absent from the causal chain.
+- Validate citation rejection, budgets, partial failures and cached reruns; inspect the UI with both legacy and team reports before declaring the work complete.

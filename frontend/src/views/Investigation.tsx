@@ -6,15 +6,15 @@ const PHASES = ["Question", "Tools", "Evidence", "Conclusion"];
 const phaseIndex = (s?: InvestigationStep) => s?.phase === "question" ? 0 : s?.phase === "tool_call" ? 1
   : s?.phase === "tool_result" ? 2 : s?.phase === "conclusion" || s?.phase === "finished" ? 3 : -1;
 
-export function Investigation({ g, setFocus }: { g: CaseGraph; setFocus: (f: SourceFocus) => void }) {
+export function Investigation({ g, setFocus, expanded = false }: { g: CaseGraph; setFocus: (f: SourceFocus) => void; expanded?: boolean }) {
   const report = g.investigation;
   const steps = report?.steps ?? [];
   const [selected, setSelected] = useState<string | null>(null);
   const tail = useRef<HTMLDivElement>(null);
   useEffect(() => { tail.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [steps.length]);
   const active = steps.find((s) => s.id === selected) ?? steps[steps.length - 1];
-  if (!report) return null;
-  return <section className="investigation" aria-label="Investigator activity">
+  if (!report) return expanded ? <div className="empty">No investigator activity has been saved for this case. The original linker saved conclusions only; a new investigation records tool calls and evidence reads here.</div> : null;
+  return <section className={`investigation ${expanded ? "expanded" : ""}`} aria-label="Investigator activity">
     <div className="invest-head"><b>LEAD INVESTIGATOR</b><span>{report.status.replace(/_/g, " ")}</span>
       <span>Turn {report.turns}/{report.max_turns} · {report.tool_calls} tools</span></div>
     <div className="invest-phases">{PHASES.map((p, i) => <span key={p} className={phaseIndex(active) === i ? "active" : ""}>

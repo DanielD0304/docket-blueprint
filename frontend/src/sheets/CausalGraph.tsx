@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtT } from "../api";
 import type { Anomaly, CausalEdge, HfacsLayer, Hypothesis, Selection } from "../types";
 import { useSize } from "../useSize";
+import { assessment } from "../components/HypothesisDetail";
 
 const W = 210, H = 54, COL_GAP = 110, ROW_GAP = 18, PAD = 40;
 export const HFACS: Record<HfacsLayer, { label: string; color: string }> = {
@@ -15,9 +16,9 @@ export const HFACS: Record<HfacsLayer, { label: string; color: string }> = {
   aircraft_environment: { label: "Aircraft / env.", color: "#6ee7a8" },
   outcome: { label: "Outcome", color: "#ff5d5d" },
 };
-const SEV = { critical: "var(--crit)", significant: "var(--warn)", minor: "var(--line)", info: "var(--ink-dim)" };
 
-interface Props { anomalies: Anomaly[]; edges: CausalEdge[]; hypotheses: Hypothesis[]; selected: Selection; onSelect: (s: Selection) => void }
+interface Props { anomalies: Anomaly[]; edges: CausalEdge[]; hypotheses: Hypothesis[]; selected: Selection; onSelect: (s: Selection) => void;
+  hypothesisId: string | null; onHypothesisSelect: (id: string | null) => void }
 
 interface Laid { a: Anomaly; rank: number; x: number; y: number }
 
@@ -82,11 +83,10 @@ function layout(anomalies: Anomaly[], edges: CausalEdge[]) {
   return { laid, edges: keep, inn, out, nCols: cols.length, width: PAD * 2 + cols.length * W + (cols.length - 1) * COL_GAP, height: PAD * 2 + 30 + maxRows * (H + ROW_GAP) };
 }
 
-export function CausalGraph({ anomalies, edges, hypotheses, selected, onSelect }: Props) {
+export function CausalGraph({ anomalies, edges, hypotheses, selected, onSelect, hypothesisId: hyp, onHypothesisSelect }: Props) {
   const [ref, size] = useSize<HTMLDivElement>();
   const svgRef = useRef<SVGSVGElement>(null);
   const [hover, setHover] = useState<string | null>(null);
-  const [hyp, setHyp] = useState<string | null>(null);
   const [tf, setTf] = useState(d3.zoomIdentity);
   const L = useMemo(() => layout(anomalies, edges), [anomalies, edges]);
   const unlinked = anomalies.filter((a) => !L.laid.has(a.id));
@@ -118,17 +118,20 @@ export function CausalGraph({ anomalies, edges, hypotheses, selected, onSelect }
   const colLabel = (r: number) => (r === 0 ? "Root causes" : r === L.nCols - 1 ? "Outcome" : `Causal step ${r}`);
 
   return (
-    <div className="sheet causal" ref={ref}>
+    <div className="sheet causal-graph">
       <div className="causal-bar">
-        <span className="label">Hypotheses</span>
-        {hypotheses.map((h) => (
-          <button key={h.id} className={`btn ${hyp === h.id ? "active" : ""}`} title={h.narrative} onClick={() => setHyp(hyp === h.id ? null : h.id)}>
-            {h.title.slice(0, 40)} · {Math.round(h.confidence * 100)}%
+        <span className="label">Explore an explanation</span>
+        {hypotheses.map((h, i) => (
+          <button key={h.id} className={`btn hypothesis-choice ${hyp === h.id ? "active" : ""}`} aria-pressed={hyp === h.id}
+            onClick={() => onHypothesisSelect(h.id)}>
+            <span>H{i + 1} · {h.title}</span><small>{assessment(h.confidence)} model assessment · {h.supporting_anomaly_ids.length} findings</small>
           </button>
         ))}
+        {hyp !== null && <button className="btn" onClick={() => onHypothesisSelect(null)}>Show full graph</button>}
         <span className="spacer" />
         {Object.entries(HFACS).map(([k, v]) => <span key={k} className="legend"><i style={{ background: v.color }} />{v.label}</span>)}
       </div>
+      <div className="causal-canvas" ref={ref}>
       <svg ref={svgRef} width={size.width} height={size.height}>
         <defs>
           <marker id="cg-arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" markerUnits="userSpaceOnUse" orient="auto">
@@ -171,8 +174,9 @@ export function CausalGraph({ anomalies, edges, hypotheses, selected, onSelect }
             return (
               <g key={a.id} transform={`translate(${x},${y})`} opacity={on ? 1 : 0.22} className="cg-node"
                 onMouseEnter={() => setHover(a.id)} onMouseLeave={() => setHover(null)} onClick={() => onSelect({ kind: "anomaly", item: a })}>
-                <rect width={W} height={H} fill={selId === a.id ? "rgba(94,225,255,0.16)" : "var(--paper-2)"} stroke={SEV[a.severity]} strokeWidth={selId === a.id || hover === a.id ? 2 : 1} />
-                <rect width={4} height={H} fill={layer.color} />
+                <rect width={W} height={H} fill="var(--paper-2)" />
+                <rect width={W} height={H} fill={layer.color} fillOpacity={selId === a.id || hover === a.id ? 0.24 : 0.1}
+                  stroke={layer.color} strokeWidth={selId === a.id || hover === a.id ? 2 : 1} />
                 <foreignObject x={10} y={4} width={W - 14} height={H - 8}>
                   <div className="cg-text">
                     <b>{a.title}</b>
@@ -186,6 +190,7 @@ export function CausalGraph({ anomalies, edges, hypotheses, selected, onSelect }
       </svg>
       {unlinked.length > 0 && L.laid.size > 0 && <div className="overlay-note">{unlinked.length} anomalies without causal links (see register) · scroll to zoom · drag to pan</div>}
       {!L.laid.size && <div className="empty">No causal links yet: they appear after the LINK stage</div>}
+      </div>
     </div>
   );
 }

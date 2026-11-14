@@ -5,6 +5,7 @@ import { playRange } from "./data";
 import { dt } from "./components/cards";
 import { SourceTag } from "./components/SourceTag";
 import type { Anomaly, CaseGraph, Citation, Selection } from "./types";
+import { assessment } from "./components/HypothesisDetail";
 import type { SourceFocus } from "./views/Sources";
 
 const STAGES = ["ingest", "triage", "extract", "verify", "align", "dedup", "investigate", "done"];
@@ -133,7 +134,7 @@ function Register({ g, onSelect, cursor }: { g: CaseGraph; onSelect: (s: Selecti
         {g.hypotheses.length > 0 && <div className="label">Hypotheses</div>}
         {g.hypotheses.map((h) => (
           <details key={h.id} className="hyp">
-            <summary><b>{h.title}</b> <span className="ft">{Math.round(h.confidence * 100)}%</span></summary>
+            <summary><b>{h.title}</b> <span className="dim">{assessment(h.confidence)} model assessment</span></summary>
             <div className="dim">{h.narrative}</div>
           </details>
         ))}
