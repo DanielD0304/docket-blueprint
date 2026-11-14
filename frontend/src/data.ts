@@ -133,6 +133,39 @@ export function byZone(g: CaseGraph): Record<ZoneId, ZoneData> {
   return out;
 }
 
+// ---------------------------------------------------------------- provenance
+
+const KIND_BY_ROLE: Record<string, string> = {
+  fdr_data: "FDR", fdr_report: "FDR REPORT", cvr_transcript: "CVR", atc: "ATC", adsb_radar: "RADAR/ADS-B",
+  ops_factual: "OPS REPORT", hp_factual: "HUMAN PERF.", interview: "INTERVIEW", weather: "WEATHER", maintenance: "MAINTENANCE",
+  systems: "SYSTEMS REPORT", powerplants: "ENGINES REPORT", structures: "STRUCTURES", materials: "LAB REPORT",
+  performance: "PERFORMANCE STUDY", party_submission: "PARTY CLAIM", manual: "MANUAL", simulation: "SIMULATOR",
+  photo: "PHOTO", video: "VIDEO", audio: "AUDIO", survival: "SURVIVAL", other: "DOCUMENT",
+};
+
+export interface SourceInfo { kind: string; item: string; title: string; where: string; verified: boolean | null; n: number; tool: boolean }
+
+/** Human-readable origin of an event / anomaly: which docket document, where in it, and how it was obtained. */
+export function sourceOf(g: CaseGraph, atom: { source_files: string[]; citations: { file_id: string; page: number | null; media_s?: number | null; verified: boolean | null }[]; certainty: string }): SourceInfo {
+  const c = atom.citations[0];
+  const f = g.files.find((x) => x.file_id === (c?.file_id ?? atom.source_files[0]));
+  if (!f) {
+    const synthetic = g.case_id === "sample";
+    return { kind: synthetic ? "SYNTHETIC" : "UNKNOWN", item: "", title: synthetic ? "synthetic demo data" : "unknown source", where: "", verified: c?.verified ?? null, n: atom.source_files.length, tool: false };
+  }
+  const kind = f.ext === ".ppb" ? "RADAR" : f.role === "adsb_radar" && f.kind === "table" ? "ADS-B" : KIND_BY_ROLE[f.role] ?? "DOCUMENT";
+  const where = c?.media_s != null ? `▶ ${Math.floor(c.media_s / 60)}:${String(Math.floor(c.media_s % 60)).padStart(2, "0")}` : c?.page ? `p.${c.page}` : f.kind === "table" || f.ext === ".ppb" ? "data" : "";
+  return {
+    kind, item: f.docket_item ? `#${f.docket_item}` : "", title: f.name.replace(/^\d+\s*-\s*/, "").replace(/\.[^.]+$/, ""),
+    where, verified: c?.verified ?? null, n: atom.source_files.length,
+    tool: atom.certainty === "measured" && (f.kind === "table" || f.ext === ".ppb"),
+  };
+}
+
+export function sourceLine(s: SourceInfo): string {
+  return [s.kind, s.item, s.where].filter(Boolean).join(" ") + (s.n > 1 ? ` +${s.n - 1}` : "");
+}
+
 /** Time range for playback: recorder coverage if present, else timed events. */
 export function playRange(g: CaseGraph): [number, number] | null {
   const ts: number[] = [];

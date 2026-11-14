@@ -6,6 +6,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { fmtT } from "../api";
 import { ADI, ZoneBody, clamp, dt, f } from "../components/cards";
+import { SourceTag } from "../components/SourceTag";
 import {
   ZONES, byZone, discreteIndex, seriesMap, valueAt, vsAt, zoneOfAnomaly, zoneOfEvent, zoneOfText,
   type SeriesMap, type ZoneId,
@@ -23,15 +24,21 @@ const C = { line: 0x8ec5ff, accent: 0x5ee1ff, warn: 0xffb547, crit: 0xff5d5d, fi
 // ------------------------------------------------------------------ path
 
 interface PathPt { t: number; p: THREE.Vector3 }
+interface GeoRef { lat0: number; lon0: number; k: number }
 
-function buildPath(g: CaseGraph, sm: SeriesMap): { pts: PathPt[]; source: string } {
+const toScene = (r: GeoRef, lat: number, lon: number) => new THREE.Vector3((lon - r.lon0) * r.k * 111320, 0, -(lat - r.lat0) * 110540);
+
+function buildPath(g: CaseGraph, sm: SeriesMap): { pts: PathPt[]; source: string; ref: GeoRef | null } {
   const altS = sm.get("altitude_ft");
   const tr = g.track.filter((p) => p.t_s !== null && isFinite(p.lat) && isFinite(p.lon)).sort((a, b) => a.t_s! - b.t_s!);
   if (tr.length > 1) {
     const last = tr[tr.length - 1];
     const k = Math.cos((last.lat * Math.PI) / 180);
+    const srcFile = g.series.find((s) => s.name === "altitude_ft")?.source_file;
+    const srcName = g.files.find((f) => f.file_id === srcFile)?.role === "fdr_data" ? "FDR lat/lon" : "ADS-B / radar track";
     return {
-      source: "ADS-B track" + (altS ? " + FDR altitude" : ""),
+      ref: { lat0: last.lat, lon0: last.lon, k },
+      source: srcName + (altS ? " + FDR altitude" : ""),
       pts: tr.map((p) => {
         const alt = valueAt(altS, p.t_s) ?? p.alt_ft ?? 0;
         return { t: p.t_s!, p: new THREE.Vector3((p.lon - last.lon) * k * 111320, Math.max(0, alt) * 0.3048, -(p.lat - last.lat) * 110540) };
@@ -48,9 +55,48 @@ function buildPath(g: CaseGraph, sm: SeriesMap): { pts: PathPt[]; source: string
       x += Math.sin(h) * v * d; z -= Math.cos(h) * v * d; prev = t;
       pts.push({ t, p: new THREE.Vector3(x, Math.max(0, a) * 0.3048, z) });
     }
-    return { pts, source: "dead reckoning (FDR alt/IAS/heading)" };
+    return { pts, source: "dead reckoning (FDR alt/IAS/heading)", ref: null };
   }
-  return { pts: [], source: "no track data" };
+  return { pts: [], source: "no track data", ref: null };
+}
+
+// ------------------------------------------------------------------ ground: map tiles + labels
+
+const tile2lon = (x: number, z: number) => (x / 2 ** z) * 360 - 180;
+const tile2lat = (y: number, z: number) => { const n = Math.PI - (2 * Math.PI * y) / 2 ** z; return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n))); };
+const lon2tile = (lon: number, z: number) => Math.floor(((lon + 180) / 360) * 2 ** z);
+const lat2tile = (lat: number, z: number) => Math.floor(((1 - Math.log(Math.tan((lat * Math.PI) / 180) + 1 / Math.cos((lat * Math.PI) / 180)) / Math.PI) / 2) * 2 ** z);
+
+/** Dark basemap tiles (© OpenStreetMap contributors © CARTO), tinted blueprint blue, laid on the ground plane. */
+function addTiles(group: THREE.Group, ref: GeoRef, box: [number, number, number, number], zoom: number, y: number, opacity: number, maxTiles = 64) {
+  const [latMin, latMax, lonMin, lonMax] = box;
+  const x0 = lon2tile(lonMin, zoom), x1 = lon2tile(lonMax, zoom), y0 = lat2tile(latMax, zoom), y1 = lat2tile(latMin, zoom);
+  if ((x1 - x0 + 1) * (y1 - y0 + 1) > maxTiles) return;
+  const loader = new THREE.TextureLoader();
+  loader.setCrossOrigin("anonymous");
+  for (let tx = x0; tx <= x1; tx++) for (let ty = y0; ty <= y1; ty++) {
+    const nw = toScene(ref, tile2lat(ty, zoom), tile2lon(tx, zoom)), se = toScene(ref, tile2lat(ty + 1, zoom), tile2lon(tx + 1, zoom));
+    const mat = new THREE.MeshBasicMaterial({ color: 0xa8c8ff, transparent: true, opacity, depthWrite: false });
+    const sub = "abcd"[(tx + ty) % 4];
+    loader.load(`https://${sub}.basemaps.cartocdn.com/dark_all/${zoom}/${tx}/${ty}.png`, (tex) => { tex.colorSpace = THREE.SRGBColorSpace; mat.map = tex; mat.needsUpdate = true; });
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(se.x - nw.x, se.z - nw.z).rotateX(-Math.PI / 2), mat);
+    m.position.set((nw.x + se.x) / 2, y, (nw.z + se.z) / 2);
+    m.renderOrder = -1;
+    group.add(m);
+  }
+}
+
+function label(text: string, color = "#8ec5ff", scale = 1) {
+  const c = document.createElement("canvas");
+  c.width = 256; c.height = 48;
+  const g = c.getContext("2d")!;
+  g.font = "500 22px IBM Plex Mono, monospace";
+  g.fillStyle = "rgba(8,28,54,0.75)"; g.fillRect(0, 6, Math.min(256, g.measureText(text).width + 16), 34);
+  g.fillStyle = color; g.fillText(text, 8, 31);
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), transparent: true, depthTest: false, sizeAttenuation: false }));
+  sp.scale.set(0.16 * scale, 0.03 * scale, 1);
+  sp.center.set(0, 0);
+  return sp;
 }
 
 function poseAt(pts: PathPt[], t: number): { pos: THREE.Vector3; hdg: number; idx: number } | null {
@@ -138,7 +184,7 @@ function makeAircraft(): Model {
 // ------------------------------------------------------------------ voices
 
 type VoiceKind = "CVR" | "ATC" | "WITNESS" | "INTERVIEW" | "PARTY" | "STATEMENT";
-interface Voice { key: string; kind: VoiceKind; who: string; t: number | null; text: string; zone: ZoneId; sel: Selection; anomalyId?: string }
+interface Voice { key: string; kind: VoiceKind; who: string; t: number | null; text: string; zone: ZoneId; sel: Selection; anomalyId?: string; atom: Event | Anomaly }
 
 function kindOf(role: string | undefined, claimedBy: string | null, lane?: string): VoiceKind {
   if (claimedBy && /witness/i.test(claimedBy)) return "WITNESS";
@@ -158,7 +204,8 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
   const di = useMemo(() => discreteIndex(g.events), [g.events]);
   const zones = useMemo(() => byZone(g), [g]);
   const roles = useMemo(() => new Map(g.files.map((x) => [x.file_id, x.role])), [g.files]);
-  const { pts, source } = useMemo(() => buildPath(g, sm), [g, sm]);
+  const { pts, source, ref: geo } = useMemo(() => buildPath(g, sm), [g, sm]);
+  const [mapOn, setMapOn] = useState(true);
   const tEnd = pts.length ? pts[pts.length - 1].t : (cursor ?? 0);
   const t = cursor ?? tEnd;
   const [cam, setCam] = useState<Cam>(() => (location.hash.match(/cam=(chase|side|top|orbit)/)?.[1] as Cam) ?? "chase");
@@ -205,15 +252,15 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
       .slice(-3);
     for (const e of recent) {
       out.push({ key: e.id, kind: kindOf(roles.get(e.source_files[0]), e.claimed_by, e.lane), who: e.actor ?? "", t: e.time.t_s, text: e.citations[0]?.quote || e.description,
-        zone: e.lane === "atc" ? "comms" : zoneOfText(e.description) ?? "cockpit", sel: { kind: "event", item: e } });
+        zone: e.lane === "atc" ? "comms" : zoneOfText(e.description) ?? "cockpit", sel: { kind: "event", item: e }, atom: e });
     }
     const claims: Voice[] = [];
     for (const a of g.anomalies) if (a.certainty === "claimed" && (a.time?.t_s == null || a.time.t_s <= t))
       claims.push({ key: a.id, kind: kindOf(roles.get(a.source_files[0]), /witness/i.test(a.title + a.observed) ? "witness" : null), who: a.title, t: a.time?.t_s ?? null, text: a.citations[0]?.quote || a.observed,
-        zone: zoneOfAnomaly(a), sel: { kind: "anomaly", item: a }, anomalyId: a.id });
+        zone: zoneOfAnomaly(a), sel: { kind: "anomaly", item: a }, anomalyId: a.id, atom: a });
     for (const e of g.events) if (e.certainty === "claimed" && (e.time.t_s === null || e.time.t_s <= t) && e.lane !== "cockpit" && e.lane !== "atc")
       claims.push({ key: e.id, kind: kindOf(roles.get(e.source_files[0]), e.claimed_by), who: e.claimed_by ?? e.actor ?? "", t: e.time.t_s, text: e.citations[0]?.quote || e.description,
-        zone: zoneOfEvent(e), sel: { kind: "event", item: e } });
+        zone: zoneOfEvent(e), sel: { kind: "event", item: e }, atom: e });
     // prefer testimony about systems that are currently in alarm, then timed, then the rest
     claims.sort((a, b) => Number(alarmZones.has(b.zone)) - Number(alarmZones.has(a.zone)) || (b.t ?? -1e12) - (a.t ?? -1e12));
     return [...out, ...claims.slice(0, 3)];
@@ -229,7 +276,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
   const tagEls = useRef(new Map<string, { el: HTMLElement; zone: ZoneId; slot: number }>());
   const lineEls = useRef(new Map<string, SVGPathElement>());
   const linkEls = useRef(new Map<string, SVGPathElement>());
-  const scene3 = useRef<{ scene: THREE.Scene; flown: THREE.Line; markers: THREE.Group; pathGroup: THREE.Group } | null>(null);
+  const scene3 = useRef<{ scene: THREE.Scene; flown: THREE.Line; markers: THREE.Group; pathGroup: THREE.Group; ground: THREE.Group; labels: THREE.Group } | null>(null);
 
   useEffect(() => {
     const el = mount.current!, ov = overlay.current!;
@@ -239,13 +286,20 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
     const scene = new THREE.Scene();
     scene.fog = new THREE.Fog(0x0a2342, 4000, 90000);
     const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 400000);
+    // Orbit controls in every mode: the target follows the aircraft, the user rotates / zooms around it.
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.enabled = false;
+    controls.dampingFactor = 0.12;
+    controls.minDistance = 25;
+    controls.maxDistance = 60000;
+    controls.maxPolarAngle = Math.PI * 0.495;
 
     const big = new THREE.GridHelper(400000, 400, C.grid, C.grid);
-    (big.material as THREE.Material).transparent = true; (big.material as THREE.Material).opacity = 0.5;
+    (big.material as THREE.Material).transparent = true; (big.material as THREE.Material).opacity = 0.35;
+    big.position.y = 0.5;
     scene.add(big);
+    const ground = new THREE.Group(); scene.add(ground);
+    const labels = new THREE.Group(); scene.add(labels);
     const fine = new THREE.GridHelper(4000, 40, C.gridFine, C.gridFine);
     (fine.material as THREE.Material).transparent = true; (fine.material as THREE.Material).opacity = 0.35;
     scene.add(fine);
@@ -259,7 +313,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
     scene.add(shadow);
     const drop = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineDashedMaterial({ color: C.warn, dashSize: 30, gapSize: 20 }));
     scene.add(drop);
-    scene3.current = { scene, flown, markers, pathGroup };
+    scene3.current = { scene, flown, markers, pathGroup, ground, labels };
 
     const ro = new ResizeObserver(() => {
       const w = el.clientWidth, h = el.clientHeight;
@@ -268,8 +322,8 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
     });
     ro.observe(el);
 
-    const camPos = new THREE.Vector3(200, 200, 200), look = new THREE.Vector3();
-    let lastCam: Cam | null = null, raf = 0, frame = 0, snap = true;
+    const prevTarget = new THREE.Vector3();
+    let lastCam: Cam | null = null, raf = 0, frame = 0, prevYaw = 0;
     const tmp = new THREE.Vector3();
     const loop = () => {
       raf = requestAnimationFrame(loop);
@@ -296,31 +350,30 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
       const fwd = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
       const right = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)); // body +z after yaw
       if (L.cam !== lastCam) {
-        snap = true;
-        controls.enabled = L.cam === "orbit";
-        if (L.cam === "orbit") { camera.position.copy(pos).add(new THREE.Vector3(-160, 90, 160)); controls.target.copy(pos); }
-        camera.fov = L.cam === "side" ? 9 : L.cam === "top" ? 30 : 50;
-        camera.up.set(0, 1, 0);
-        if (L.cam === "top") camera.up.set(0, 0, -1);
+        // preset placement (user can orbit / zoom from here); side uses a narrow FOV for a flat, 2D-like profile
+        const preset = L.cam === "chase" ? pos.clone().addScaledVector(fwd, -62).addScaledVector(right, 22).add(new THREE.Vector3(0, 14, 0))
+          : L.cam === "side" ? pos.clone().addScaledVector(right, 330).add(new THREE.Vector3(0, 4, 0))
+          : L.cam === "top" ? pos.clone().addScaledVector(fwd, -40).add(new THREE.Vector3(0, 900, 0))
+          : pos.clone().add(new THREE.Vector3(-260, 140, 260));
+        camera.fov = L.cam === "side" ? 14 : 50;
         camera.updateProjectionMatrix();
+        camera.position.copy(preset);
+        controls.target.copy(pos);
+        prevTarget.copy(pos); prevYaw = yaw;
         lastCam = L.cam;
       }
-      if (L.cam === "orbit") {
-        controls.target.lerp(pos, 0.2);
-        controls.update();
-      } else {
-        // chase: behind, above, slightly right; side: from the right so the nose points right (flat 2D look via 9° FOV)
-        const target = L.cam === "chase" ? pos.clone().addScaledVector(fwd, -95).add(new THREE.Vector3(0, 24, 0)).addScaledVector(right, 30)
-          : L.cam === "side" ? pos.clone().addScaledVector(right, 720).add(new THREE.Vector3(0, 8, 0))
-          : pos.clone().add(new THREE.Vector3(0, 2600, 0.01));
-        const lookAt = L.cam === "chase" ? pos.clone().addScaledVector(fwd, 30) : pos;
-        // snap on first frame / mode change / scrubbing jumps, smooth otherwise
-        if (snap || camPos.distanceTo(target) > 1500) { camPos.copy(target); look.copy(lookAt); snap = false; }
-        camPos.lerp(target, L.cam === "top" ? 0.2 : 0.12);
-        look.lerp(lookAt, 0.25);
-        camera.position.copy(camPos);
-        camera.lookAt(look);
+      // follow: move the camera with the aircraft; in chase/side also turn with its heading
+      camera.position.add(pos.clone().sub(prevTarget));
+      if (L.cam === "chase" || L.cam === "side") {
+        const dy = yaw - prevYaw;
+        if (Math.abs(dy) > 1e-6 && Math.abs(dy) < Math.PI) {
+          const off = camera.position.clone().sub(pos).applyAxisAngle(new THREE.Vector3(0, 1, 0), dy);
+          camera.position.copy(pos).add(off);
+        }
       }
+      controls.target.copy(pos);
+      prevTarget.copy(pos); prevYaw = yaw;
+      controls.update();
       renderer.render(scene, camera);
 
       // ---- overlay: project anchors, place tags, draw leader lines
@@ -374,8 +427,24 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
   // path + anomaly markers
   useEffect(() => {
     const s = scene3.current; if (!s) return;
-    s.pathGroup.clear(); s.markers.clear();
+    s.pathGroup.clear(); s.markers.clear(); s.labels.clear();
     if (pts.length < 2) return;
+    // time marks along the path (adaptive interval, ≤ ~30 labels), plus start / end
+    const span = pts[pts.length - 1].t - pts[0].t;
+    const every = [30, 60, 120, 300, 600, 900, 1800].find((x) => span / x <= 30) ?? 3600;
+    const tick: THREE.Vector3[] = [];
+    for (let tt = Math.ceil(pts[0].t / every) * every; tt < pts[pts.length - 1].t; tt += every) {
+      const pose = poseAt(pts, tt); if (!pose) continue;
+      const l = label(fmtT(tt).slice(0, 5), "#8ec5ff", 0.8);
+      l.position.copy(pose.pos);
+      s.labels.add(l);
+      tick.push(pose.pos, new THREE.Vector3(pose.pos.x, 0, pose.pos.z));
+    }
+    s.labels.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(tick), new THREE.LineBasicMaterial({ color: C.accent, transparent: true, opacity: 0.35 })));
+    const first = label(`START ${fmtT(pts[0].t)}`, "#6ee7a8"); first.position.copy(pts[0].p); s.labels.add(first);
+    const last = label(`LAST POINT ${fmtT(pts[pts.length - 1].t)}`, "#ff5d5d"); last.position.copy(pts[pts.length - 1].p).setY(0); s.labels.add(last);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(380, 400, 64).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ color: C.crit, transparent: true, opacity: 0.6 }));
+    ring.position.copy(pts[pts.length - 1].p).setY(1); s.labels.add(ring);
     const vs3 = pts.map((p) => p.p);
     s.pathGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(vs3), new THREE.LineBasicMaterial({ color: C.line, transparent: true, opacity: 0.3 })));
     const sh = new THREE.Line(new THREE.BufferGeometry().setFromPoints(vs3.map((v) => new THREE.Vector3(v.x, 1, v.z))),
@@ -398,6 +467,20 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
         new THREE.LineBasicMaterial({ color: col, transparent: true, opacity: 0.35 })));
     }
   }, [pts, g.anomalies]);
+
+  // ground: basemap tiles — overview of the whole route + detail around the final position
+  useEffect(() => {
+    const s = scene3.current; if (!s) return;
+    s.ground.clear();
+    if (!mapOn || !geo || pts.length < 2) return;
+    const lats = g.track.map((p) => p.lat), lons = g.track.map((p) => p.lon);
+    const pad = 0.4;
+    const box: [number, number, number, number] = [Math.min(...lats) - pad, Math.max(...lats) + pad, Math.min(...lons) - pad, Math.max(...lons) + pad];
+    const zOver = [9, 8, 7, 6, 5, 4].find((z) => (lon2tile(box[3], z) - lon2tile(box[2], z) + 1) * (lat2tile(box[0], z) - lat2tile(box[1], z) + 1) <= 48) ?? 4;
+    addTiles(s.ground, geo, box, zOver, -1, 0.75);
+    const d = 0.35; // ~35 km around the last point in higher detail
+    addTiles(s.ground, geo, [geo.lat0 - d, geo.lat0 + d, geo.lon0 - d, geo.lon0 + d], 11, 0, 0.9, 36);
+  }, [mapOn, geo, pts.length, g.track]);
 
   // ------------------------------------------------------------------ render overlay
   const tagSlots = new Map<ZoneId, number>();
@@ -423,9 +506,11 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
 
       {/* camera + source */}
       <div className="cam-bar">
-        {CAMS.map(([k, label]) => <button key={k} className={`btn ${cam === k ? "active" : ""}`} onClick={() => setCam(k)}>{label}</button>)}
-        <span className="label" style={{ marginLeft: 8 }}>{source}</span>
+        {CAMS.map(([k, lbl]) => <button key={k} className={`btn ${cam === k ? "active" : ""}`} onClick={() => setCam(k)}>{lbl}</button>)}
+        <button className={`btn ${mapOn ? "active" : ""}`} onClick={() => setMapOn(!mapOn)} title="Basemap tiles on the ground">Map</button>
+        <span className="label" style={{ marginLeft: 8 }}>path: {source}</span>
       </div>
+      {mapOn && geo && <div className="attrib">© OpenStreetMap contributors © CARTO · drag to orbit · scroll to zoom</div>}
 
       {/* left column: HUD + voices */}
       <div className="col left">
@@ -448,7 +533,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
             onClick={() => onSelect(vc.sel)}>
             <div className="vhead"><span className="kind">{vc.kind}</span><span className="who">{vc.who}</span><span className="ft">{vc.t !== null ? fmtT(vc.t) : "untimed"}</span></div>
             <div className="vtext">“{vc.text.slice(0, 170)}{vc.text.length > 170 ? "…" : ""}”</div>
-            <div className="vzone">→ {ZONES.find((z) => z.id === vc.zone)?.label.toLowerCase()}</div>
+            <div className="vzone"><SourceTag g={g} atom={vc.atom} /> → {ZONES.find((z) => z.id === vc.zone)?.label.toLowerCase()}</div>
           </div>
         ))}
         {!voices.length && <div className="card dim">No crew / ATC / witness statements up to {fmtT(t)}</div>}
@@ -465,6 +550,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
               onMouseEnter={() => setHoverZone(z)} onMouseLeave={() => setHoverZone(null)}>
               <div className="vhead"><i className={`led ${alarmZones.has(z) ? "red" : n ? "amber" : "green"}`} /><span className="kind">{label}</span><span className="who">{n ? `${n} anom` : ""}</span></div>
               <ZoneBody id={z} t={t} sm={sm} di={di} last={last} />
+              {last && <div className="vzone">last: <SourceTag g={g} atom={last} /></div>}
             </div>
           );
         })}
@@ -487,6 +573,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
             {isHover && (
               <div className="pop">
                 <div className="ph"><b>{a.title}</b><span className="ft">{a.time?.t_s != null ? fmtT(a.time.t_s) : "latent condition"}</span></div>
+                <div><SourceTag g={g} atom={a} long /> <span className="dim">{a.certainty}</span></div>
                 <div className="pr"><span>expected</span>{a.expected}</div>
                 <div className="pr"><span>observed</span>{a.observed}</div>
                 {(links.get(a.id) ?? []).map((l) => {

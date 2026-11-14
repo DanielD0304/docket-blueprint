@@ -5,6 +5,7 @@ import { fmtT } from "../api";
 import { playRange, seriesMap } from "../data";
 import type { CaseGraph, Event, Selection } from "../types";
 import { useSize } from "../useSize";
+import { SourceTag } from "../components/SourceTag";
 
 export interface PlayState { playing: boolean; speed: number }
 
@@ -196,6 +197,7 @@ export function TimelineStrip({ g, cursor, setCursor, play, setPlay, selected, o
         </svg>
         {hover && (
           <div className="strip-tip" style={{ left: Math.min(width - 300, Math.max(0, hover.x - 150)) }}>
+            <div style={{ marginBottom: 3 }}><SourceTag g={g} atom={hover.e} long /></div>
             <span className="ft">{fmtT(hover.e.time.t_s)}</span><b>{hover.e.actor ? `${hover.e.actor}: ` : ""}</b>{hover.e.description.slice(0, 140)}
           </div>
         )}

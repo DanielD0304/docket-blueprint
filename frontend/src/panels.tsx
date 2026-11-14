@@ -1,6 +1,7 @@
 import React from "react";
 import { fmtT } from "./api";
 import { dt } from "./components/cards";
+import { SourceTag } from "./components/SourceTag";
 import type { Anomaly, CaseGraph, Citation, Selection } from "./types";
 import type { SourceFocus } from "./views/Sources";
 
@@ -25,6 +26,7 @@ export function Header({ g, onHome, actions }: { g: CaseGraph; onHome: () => voi
       <div className="hactions">
         {c.blind_mode && <span className="badge" style={{ color: "var(--warn)" }}>Blind</span>}
         {g.stats?.mock && <span className="badge dim">Mock</span>}
+        {(g.case_id === "sample" || /synthetic/i.test(c.title)) && <span className="synthetic-banner" title="Generated test data, not from any real accident docket">Synthetic demo data</span>}
         {actions}
       </div>
     </div>
@@ -139,7 +141,8 @@ function Register({ g, onSelect, cursor }: { g: CaseGraph; onSelect: (s: Selecti
           return (
             <div key={a.id} className={`regitem ${active ? "active" : ""} ${recent ? "recent" : ""}`} onClick={() => onSelect({ kind: "anomaly", item: a })}>
               <div className="ri-top"><span>{a.title}</span><span className={`badge sev-${a.severity}`}>{a.severity}</span></div>
-              <div className="dim">{a.time?.t_s != null ? fmtT(a.time.t_s) : "latent"} · {a.domain.replace(/_/g, " ")} · {a.certainty}{a.verified ? " · ✓" : ""}</div>
+              <div className="dim">{a.time?.t_s != null ? fmtT(a.time.t_s) : "latent"} · {a.domain.replace(/_/g, " ")} · {a.certainty}</div>
+              <SourceTag g={g} atom={a} />
             </div>
           );
         })}
