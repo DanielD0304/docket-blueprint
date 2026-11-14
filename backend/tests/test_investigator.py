@@ -39,6 +39,21 @@ class FakeLLM:
 
 
 class ToolTests(TestCase):
+    def test_legacy_live_clock_resolves_before_media_finishes(self):
+        from app.fusion.clock_anchor import resolve_live_clocks
+        g = graph()
+        g.status, g.stage = "running", "extract"
+        g.files[0].summary = "Track: clock mmss (hour recovered in fusion)"
+        g.series = [
+            Series(name="altitude_ft", source_file="fdr", points=[(64800 + i, i * 10) for i in range(30)]),
+            Series(name="altitude_ft_adsb", source_file="f", points=[(i, i * 10) for i in range(30)])]
+        resolve_live_clocks(g)
+        self.assertEqual(g.series[1].points[0][0], 64800)
+        self.assertEqual(g.series[1].clock_basis, "utc")
+        self.assertEqual(g.stage, "extract")
+        self.assertEqual(resolve_live_clocks(g), {})
+        self.assertEqual(g.series[1].points[0][0], 64800)
+
     def test_dedup_preserves_distinct_observation_times(self):
         from app.fusion.dedup import _merge_anomalies
         a, b = graph().anomalies[:2]

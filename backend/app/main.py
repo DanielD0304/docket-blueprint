@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from .config import MOCK_LLM, MODEL_FAST, MODEL_PRO
 from .ingest.unzip import safe_extract
+from .fusion.clock_anchor import resolve_live_clocks
 from .orchestrator import CaseRunner
 from .refuse import prepare_fusion_run
 from .schemas import CaseConfig
@@ -130,6 +131,8 @@ def get_case(case_id: str):
     if not store.meta_path.exists():
         raise HTTPException(404)
     g = store.load_graph()
+    if g:
+        resolve_live_clocks(g)
     return json.loads(g.model_dump_json()) if g else {"case_id": case_id, "config": store.meta["config"],
                                                       "status": "created", "stage": "created"}
 
@@ -169,6 +172,14 @@ async def stream(case_id: str):
                             yield f"data: {line.decode('utf-8').strip()}\n\n"
                             sent = True
             if not replay_done and (not store.events_path.exists() or offset >= store.events_path.stat().st_size):
+                # A legacy CLI/API process may have emitted unaligned numeric
+                # evidence. Correct that history before transitioning to live.
+                graph = store.load_graph()
+                if graph and resolve_live_clocks(graph):
+                    packet = {"type": "clock_sync", "series": [s.model_dump() for s in graph.series],
+                              "events": [e.model_dump() for e in graph.events],
+                              "track": [p.model_dump() for p in graph.track], "clocks": graph.clocks}
+                    yield f"data: {json.dumps(packet)}\n\n"
                 yield 'data: {"type":"replay_done"}\n\n'
                 replay_done = True
             idle = 0 if sent else idle + 1

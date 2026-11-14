@@ -10,6 +10,23 @@ import numpy as np
 from ..schemas import CaseGraph
 
 
+def resolve_live_clocks(graph: CaseGraph) -> dict:
+    """Upgrade legacy live views without mutating their extraction caches.
+
+    Old processes only anchor clocks after slow media jobs finish. Detect their
+    explicit MM:SS metadata and align the view as soon as the FDR is available.
+    """
+    pending = {e.source_files[0] for e in graph.events
+               if e.source_files and e.time.aligned_by == "mmss"}
+    pending.update(s.source_file for s in graph.series if s.clock_basis == "unresolved")
+    pending.update(f.file_id for f in graph.files if f.summary and "clock mmss" in f.summary)
+    pending -= graph.clocks.keys()
+    for s in graph.series:
+        if s.source_file in pending:
+            s.clock_basis = "unresolved"
+    return anchor_mmss(graph, pending) if pending else {}
+
+
 def _interp(points: list[tuple[float, float]], ts: np.ndarray) -> np.ndarray:
     p = np.array(points, dtype=float)
     out = np.interp(ts, p[:, 0], p[:, 1], left=np.nan, right=np.nan)
