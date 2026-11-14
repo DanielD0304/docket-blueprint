@@ -138,16 +138,39 @@ class LLMHypothesis(BaseModel):
     contributions: list[LLMHypothesisContribution] = []
 
 
+class LLMInvestigationFinding(BaseModel):
+    title: str
+    explanation: str
+    evidence_ids: list[str]
+    stance: Literal["supports", "challenges", "context"] = "supports"
+
+
+class LLMResearchReport(BaseModel):
+    summary: str
+    findings: list[LLMInvestigationFinding] = []
+    unanswered_questions: list[str] = []
+
+
+class LLMInvestigationConclusion(BaseModel):
+    summary: str = Field(description="Explicit overall conclusion: most supported explanation, why, what was ruled down, and remaining uncertainty")
+    evidence_ids: list[str]
+    findings: list[LLMInvestigationFinding] = []
+    preferred_hypothesis_title: str = ""
+    alternative_hypothesis_titles: list[str] = []
+    limitations: list[str] = []
+
+
 class LinkerOutput(BaseModel):
     layers: list[LLMLayer] = []
     edges: list[LLMEdge] = []
     hypotheses: list[LLMHypothesis] = []
     open_questions: list[str] = []
     occurrence_categories: list[str] = Field([], description="ICAO CICTT codes, e.g. LOC-I, CFIT, SCF-PP")
+    conclusion: LLMInvestigationConclusion | None = None
 
 
 class InvestigatorToolCall(BaseModel):
-    tool: Literal["list_sources", "search_evidence", "inspect_evidence", "timeline_window", "read_page", "recorder_window"]
+    tool: Literal["list_sources", "search_evidence", "inspect_evidence", "timeline_window", "read_page", "recorder_window", "sensor_window"]
     query: str = ""
     evidence_ids: list[str] = []
     file_id: str = ""
@@ -162,6 +185,7 @@ class InvestigatorDecision(BaseModel):
     action: Literal["research", "conclude"]
     tools: list[InvestigatorToolCall] = []
     conclusion: LinkerOutput | None = None
+    research_report: LLMResearchReport | None = None
 
 
 # ---------------------------------------------------------------- stored
@@ -278,6 +302,52 @@ class InvestigationStep(BaseModel):
     tool: str | None = None
     evidence_ids: list[str] = []
     citations: list[Citation] = []
+    agent_id: str = "lead"
+    agent_name: str = "Lead investigator"
+    parent_step_id: str | None = None
+
+
+class InvestigationFinding(BaseModel):
+    id: str
+    title: str
+    explanation: str
+    evidence_ids: list[str]
+    citations: list[Citation]
+    stance: Literal["supports", "challenges", "context"] = "supports"
+
+
+class InvestigationConclusion(BaseModel):
+    summary: str
+    evidence_ids: list[str] = []
+    findings: list[InvestigationFinding] = []
+    preferred_hypothesis_id: str | None = None
+    alternative_hypothesis_ids: list[str] = []
+    limitations: list[str] = []
+    citations: list[Citation] = []
+    status: Literal["supported", "incomplete"] = "supported"
+
+
+class InvestigationAgent(BaseModel):
+    id: str
+    name: str
+    role: str
+    status: Literal["queued", "running", "done", "budget_exhausted", "error"] = "queued"
+    turns: int = 0
+    tool_calls: int = 0
+    max_turns: int
+    summary: str = ""
+    evidence_ids: list[str] = []
+    citations: list[Citation] = []
+    findings: list[InvestigationFinding] = []
+
+
+class InvestigationCoverage(BaseModel):
+    eligible_sources: int = 0
+    total_evidence: int = 0
+    inspected_evidence: int = 0
+    inspected_sources: int = 0
+    pages_read: int = 0
+    recorder_checks: int = 0
 
 
 class InvestigationReport(BaseModel):
@@ -288,6 +358,10 @@ class InvestigationReport(BaseModel):
     tool_calls: int = 0
     rejected_claims: int = 0
     steps: list[InvestigationStep] = []
+    mode: Literal["single", "team"] = "single"
+    agents: list[InvestigationAgent] = []
+    conclusion: InvestigationConclusion | None = None
+    coverage: InvestigationCoverage | None = None
 
 
 class Conflict(BaseModel):
@@ -351,6 +425,52 @@ class CaseConfig(BaseModel):
     blind_mode: bool = True  # exclude final report / probable cause documents
 
 
+class SensorState(BaseModel):
+    id: str
+    label: str  # stable / rising / falling / variable, or the recorded discrete value
+    start_s: float
+    end_s: float
+    first_row: int
+    last_row: int
+    samples: int
+    minimum: float | None = None
+    maximum: float | None = None
+    median: float | None = None
+    citations: list[Citation]
+    certainty: Certainty = "measured"
+    verified: bool = True
+
+
+class SensorFinding(BaseModel):
+    id: str
+    kind: Literal["unusual_change", "level_outlier", "sampling_gap"]
+    description: str
+    start_s: float
+    end_s: float
+    score: float | None = None
+    citations: list[Citation]
+    certainty: Certainty = "measured"
+    verified: bool = True
+
+
+class SensorAnalysis(BaseModel):
+    sensor_id: str
+    source_file: str
+    column: str
+    unit: str = ""
+    kind: Literal["continuous", "discrete", "unsupported"]
+    status: Literal["analyzed", "insufficient_samples", "unresolved_clock", "no_samples", "unsupported"]
+    samples: int
+    cadence_s: float | None = None
+    method: str
+    limitations: list[str] = []
+    states: list[SensorState] = []
+    findings: list[SensorFinding] = []
+    points: list[tuple[float, float]] = []  # display only; detectors use native samples
+    plot_gaps: list[tuple[float, float]] = []  # all observed gaps, independent of finding caps
+    citations: list[Citation] = []
+
+
 class CaseGraph(BaseModel):
     case_id: str
     config: CaseConfig
@@ -369,5 +489,6 @@ class CaseGraph(BaseModel):
     occurrence_categories: list[str] = []
     track: list[TrackPoint] = []
     series: list[Series] = []
+    sensors: list[SensorAnalysis] = []
     stats: dict = {}
     investigation: InvestigationReport | None = None

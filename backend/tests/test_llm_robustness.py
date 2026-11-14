@@ -51,7 +51,7 @@ class StructuredTests(IsolatedAsyncioTestCase):
         llm = fake_llm(stall)
         with self.assertRaises(RuntimeError) as cm:
             await llm.structured(model="m", system="s", parts=["p"], schema=Extraction, retries=2, timeout_s=0.05)
-        self.assertIn("no response within", str(cm.exception))
+        self.assertIn("exceeded", str(cm.exception))
         self.assertEqual(llm._models.calls, 2)
 
 

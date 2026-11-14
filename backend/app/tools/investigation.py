@@ -24,6 +24,10 @@ class EvidenceTools:
             a.id: a for group in (graph.events, graph.anomalies, graph.facts) for a in group
             if any(c.file_id in self.files and c.verified is not False and c.quote for c in a.citations)
         }
+        for sensor in graph.sensors:
+            if sensor.source_file in self.files:
+                self.atoms.update({a.id: a for a in [*sensor.states, *sensor.findings]
+                                   if any(c.verified is not False and c.quote for c in a.citations)})
         # Only evidence actually returned by a tool can support the final output.
         self.seen: dict[str, list[Citation]] = {}
 
@@ -51,6 +55,9 @@ class EvidenceTools:
                 if a.id in self.atoms
             ],
             "conflicts": [c.model_dump() for c in self.graph.conflicts[:20]],
+            "sensors": [{"sensor_id": s.sensor_id, "file_id": s.source_file, "column": s.column,
+                         "kind": s.kind, "status": s.status, "states": len(s.states),
+                         "findings": len(s.findings)} for s in self.graph.sensors if s.source_file in self.files],
             "series": [{"name": s.name, "file_id": s.source_file, "unit": s.unit,
                         "start_s": s.points[0][0] if s.points else None,
                         "end_s": s.points[-1][0] if s.points else None}
@@ -71,7 +78,7 @@ class EvidenceTools:
             terms = call.query.lower().split()
             def rank(a):
                 text = " ".join(str(getattr(a, k, "")) for k in
-                                ("title", "observed", "expected", "description", "subject", "predicate", "value")).lower()
+                                ("title", "observed", "expected", "description", "subject", "predicate", "value", "label")).lower()
                 return (sum(t in text for t in terms), fuzz.WRatio(call.query.lower(), text))
             candidates.sort(key=lambda a: (*rank(a), a.id), reverse=True)
             return {"evidence": [self._item(a) for a in candidates[:8] if rank(a)[0] > 0 or rank(a)[1] >= 65]}
@@ -93,6 +100,22 @@ class EvidenceTools:
             return self.read_page(call.file_id, call.page)
         if call.tool == "recorder_window":
             return self.recorder_window(call)
+        if call.tool == "sensor_window":
+            if (call.start_s is None or call.end_s is None
+                    or not all(map(math.isfinite, (call.start_s, call.end_s)))
+                    or not 0 <= call.end_s - call.start_s <= 7200):
+                raise ValueError("An ordered finite UTC window of at most 7200 seconds is required")
+            matches = [s for s in self.graph.sensors if s.source_file in self.files
+                       and (not call.file_id or s.source_file == call.file_id)
+                       and call.series_name in (s.sensor_id, s.column)]
+            if len(matches) != 1:
+                raise ValueError("Select an exact sensor_id or column and file_id from the overview")
+            sensor = matches[0]
+            items = [x for x in [*sensor.findings, *sensor.states]
+                     if x.start_s <= call.end_s and x.end_s >= call.start_s]
+            return {"sensor_id": sensor.sensor_id, "column": sensor.column, "unit": sensor.unit,
+                    "status": sensor.status, "limitations": sensor.limitations,
+                    "evidence": [self._item(x) for x in items[:40]], "total": len(items), "truncated": len(items) > 40}
         raise ValueError("unknown tool")
 
     def read_page(self, file_id: str, page: int) -> dict:

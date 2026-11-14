@@ -1,0 +1,16 @@
+.sensor-view { display:flex; height:100%; min-height:0; color:var(--text); }
+.sensor-list { flex:0 0 260px; overflow:auto; padding:16px; border-right:1px solid var(--line-dim); }
+.sensor-list label { display:block; margin-bottom:12px; }
+.sensor-list input:not([type=checkbox]) { display:block; width:100%; margin-top:8px; padding:8px; color:inherit; background:transparent; border:1px solid var(--line-dim); }
+.sensor-choice { display:block; width:100%; text-align:left; padding:10px; margin:6px 0; background:transparent; color:inherit; border:1px solid var(--line-dim); cursor:pointer; }
+.sensor-choice span, .sensor-choice small { display:block; margin-top:5px; opacity:.75; overflow-wrap:anywhere; }
+.sensor-choice.active, .sensor-states .active { border-color:var(--accent); background:rgba(94,225,255,.08); }
+.sensor-detail { flex:1; min-width:0; overflow:auto; padding:20px; }
+.sensor-detail h2 { margin-top:0; }
+.sensor-detail article, .sensor-detail details { padding:10px 0; border-bottom:1px solid var(--line-dim); }
+.sensor-detail summary { cursor:pointer; padding:5px 0; }
+.sensor-plot { width:100%; min-height:130px; max-height:240px; }
+.sensor-plot text { fill:currentColor; font-size:10px; }
+.sensor-source { display:block; max-width:100%; text-align:left; white-space:normal; overflow-wrap:anywhere; margin:5px 0; font-size:10px; }
+.sensor-note { opacity:.7; font-size:11px; }
+@media(max-width:800px) { .sensor-list { flex-basis:180px; padding:8px; } .sensor-detail { padding:10px; } }

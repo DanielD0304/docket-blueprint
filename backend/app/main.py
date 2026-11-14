@@ -40,7 +40,10 @@ def _mark_interrupted_runs() -> None:
         if not store.meta_path.exists():
             continue
         g = store.load_graph()
-        if not g or g.status != "running":
+        # "running": killed hard (no chance to save). "error ... interrupted": the orchestrator's own
+        # CancelledError handler saved the status on a clean shutdown, but job events may still be open.
+        interrupted_cleanly = bool(g) and g.status == "error" and "interrupt" in str(g.stats.get("error", "")).lower()
+        if not g or (g.status != "running" and not interrupted_cleanly):
             continue
         open_jobs: dict[str, dict] = {}
         if store.events_path.exists():
@@ -49,9 +52,11 @@ def _mark_interrupted_runs() -> None:
                     m = json.loads(line)
                     if m.get("type") == "job":
                         open_jobs[m["job_id"]] = m
-        for job_id, m in open_jobs.items():
-            if m.get("status") == "running":
-                bus.publish(d.name, "job", job_id=job_id, file_id=m.get("file_id"), status="interrupted")
+        still_open = [(job_id, m) for job_id, m in open_jobs.items() if m.get("status") == "running"]
+        for job_id, m in still_open:
+            bus.publish(d.name, "job", job_id=job_id, file_id=m.get("file_id"), status="interrupted")
+        if interrupted_cleanly:
+            continue  # status already persisted by the orchestrator
         g.status, g.stage = "error", "interrupted"
         g.stats["error"] = "interrupted by a backend restart; use Re-run (finished jobs are reused from the cache)"
         store.save_graph(g)
@@ -141,7 +146,7 @@ def list_cases():
 
 
 class FusionRunRequest(BaseModel):
-    fusion: Literal["investigator", "linker"] = "investigator"
+    fusion: Literal["team", "investigator", "linker"] = "investigator"
     max_turns: int = Field(8, ge=2, le=20)
 
 

@@ -15,6 +15,8 @@ import pandas as pd
 
 from ..schemas import Anomaly, AnomalyObservation, Citation, Event, Param, Series, SourceFile, TimeRef
 from .table import find_col, load_table, numeric, time_seconds
+from .discovery import VERSION as DISCOVERY_VERSION, discover_changes
+from .sensors import analyze_sensors
 
 # Discretes worth showing, most important first (others are skipped to keep the timeline readable).
 DISCRETE_PRIORITY = [
@@ -167,6 +169,24 @@ def analyze_fdr(path: Path, sf: SourceFile, local_utc_offset_h: float = 0.0) -> 
                 observations=[AnomalyObservation(start_s=float(tv[i0]), end_s=float(tv[i1]),
                              citations=[cite(i0, i1, col, f"peak {float(v[peak_i]):.2f}")])] if utc else []))
 
+    # Statistical discovery uses native samples, never the UI's reduced series.
+    # Only clocks known to be seconds are eligible (subframes are not seconds).
+    discoveries = discover_changes(df, tv) if utc else []
+    for k, hit in enumerate(discoveries):
+        detail = (f"{DISCOVERY_VERSION}; {hit.horizon} change rate {hit.rate:.6g} {hit.unit}/s; "
+                  f"recording median {hit.center:.6g}, robust scale {hit.scale:.6g}; "
+                  f"score {hit.score:.2f} >= 8 (not a probability). Parsed data rows exclude metadata.")
+        citations = [cite(hit.start, hit.end, hit.column, detail),
+                     cite(hit.baseline_start, hit.baseline_end, hit.column, "whole-recording rate baseline; "
+                          "scale=max(1.4826*MAD,IQR/1.349,capped-step/interval,numerical-floor); gaps >3 cadences excluded")]
+        anomalies.append(Anomaly(
+            id=f"an-{sf.file_id}-discovery-{k}", time=tref(hit.start), domain="aircraft_system",
+            title=f"Unusual change: {hit.column}",
+            expected="Change rates typical of this recording; statistical reference only, not an aircraft operating limit.",
+            observed=detail + " Candidate may reflect normal maneuvering, a regime change, or a sensor artifact; investigate in context.",
+            severity="info", certainty="measured", citations=citations, source_files=[sf.file_id], verified=True,
+            observations=[AnomalyObservation(start_s=float(tv[hit.start]), end_s=float(tv[hit.end]), citations=citations)]))
+
     # 3) profile series for the UI (on UTC when possible)
     series: list[Series] = []
     for name, sunit, pats, excl in SERIES_COLS:
@@ -199,11 +219,15 @@ def analyze_fdr(path: Path, sf: SourceFile, local_utc_offset_h: float = 0.0) -> 
                       "alt_ft": None if np.isnan(alt[i]) else float(alt[i]), "gs_kt": None if np.isnan(gs[i]) else float(gs[i])} for i in sel]
 
     t_ok = tv[~np.isnan(tv)]
+    sensors = analyze_sensors(df, tv, sf.file_id, clock_resolved=utc, time_column=tcol)
     return {
         "track": track, "track_rank": 1,
         "summary": f"FDR table: {len(df)} rows × {len(df.columns)} params, clock '{tcol}' ({unit or basis}"
                    f"{' → UTC' if basis == 'local' else ''}), span {t_ok.min() if len(t_ok) else 0:.0f}-{t_ok.max() if len(t_ok) else 0:.0f} s. "
-                   f"{len(events)} discrete transitions, {len(anomalies)} exceedances, {len(series)} series.",
+                   f"{len(events)} discrete transitions, {len(anomalies) - len(discoveries)} exceedances, "
+                   f"{len(discoveries)} statistical change candidates, {len(series)} series.",
+        "discovery_version": DISCOVERY_VERSION,
+        "sensors": [s.model_dump() for s in sensors],
         "events": [e.model_dump() for e in events],
         "anomalies": [a.model_dump() for a in anomalies],
         "entities": [], "facts": [],

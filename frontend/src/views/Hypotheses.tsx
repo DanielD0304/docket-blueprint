@@ -18,6 +18,6 @@ export function Hypotheses({ g, hypothesisId, onChoose, onSelect, openSource }: 
         <small>{assessment(h.confidence)} model assessment · {h.supporting_anomaly_ids.length} supporting findings</small>
       </button>)}
     </nav>
-    <div className="hypothesis-workspace"><HypothesisDetail g={g} hypothesis={active} onSelect={onSelect} openSource={openSource} /></div>
+    <div className="hypothesis-workspace">{g.investigation?.conclusion && <section style={{padding:"20px 24px",borderBottom:"1px solid var(--line-dim)",maxWidth:900}}><div className="label">Overall investigation conclusion</div><p style={{fontSize:16,lineHeight:1.65}}>{g.investigation.conclusion.summary}</p>{g.investigation.conclusion.limitations.length > 0 && <details><summary>Limitations and uncertainty</summary><ul>{g.investigation.conclusion.limitations.map((x,i)=><li key={i}>{x}</li>)}</ul></details>}</section>}<HypothesisDetail key={active.id} g={g} hypothesis={active} onSelect={onSelect} openSource={openSource} /></div>
   </div>;
 }

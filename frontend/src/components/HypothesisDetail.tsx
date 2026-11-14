@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { fmtT } from "../api";
 import type { CaseGraph, Hypothesis, HypothesisContribution, Selection } from "../types";
 import type { SourceFocus } from "../views/Sources";
@@ -8,6 +9,7 @@ export function HypothesisDetail({ g, hypothesis: h, onSelect, openSource, onClo
   g: CaseGraph; hypothesis: Hypothesis; onSelect: (s: Selection) => void;
   openSource: (f: SourceFocus) => void; onClose?: () => void;
 }) {
+  const [roleFilter, setRoleFilter] = useState("all");
   const ids = new Set(h.supporting_anomaly_ids);
   const support = g.anomalies.filter((a) => ids.has(a.id));
   const links = g.causal_edges.filter((e) => ids.has(e.source) && ids.has(e.target));
@@ -28,7 +30,8 @@ export function HypothesisDetail({ g, hypothesis: h, onSelect, openSource, onClo
       <h3>Evidence feeding this explanation <span>({contributions.length})</span></h3>
       <p className="dim">Evidence is shown here even when it has no causal graph edge.</p>
       {!h.contributions?.length && <p className="hyp-legacy">This result lists supporting findings but has no saved per-finding contribution rationales. The explanation above is the model's overall account.</p>}
-      {(["supports", "challenges", "context"] as const).map((role) => {
+      <div className="hyp-role-filters">{["all", "supports", "challenges", "context"].map(role => <button className={`btn ${roleFilter === role ? "active" : ""}`} onClick={() => setRoleFilter(role)} key={role}>{role} · {role === "all" ? contributions.length : contributions.filter(c => c.role === role).length}</button>)}</div>
+      {(["supports", "challenges", "context"] as const).filter(role => roleFilter === "all" || roleFilter === role).map((role) => {
         const items = contributions.filter((c) => c.role === role);
         if (!items.length) return null;
         return <section className={`hyp-feed-group ${role}`} key={role}>

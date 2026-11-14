@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 from typing import TypeVar
 
@@ -14,6 +15,7 @@ log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 RETRYABLE = {408, 429, 500, 502, 503, 504}
+REQUEST_TIMEOUT_S = float(os.getenv("GEMINI_REQUEST_TIMEOUT_S", "480"))
 
 
 class OutputTruncated(RuntimeError):
@@ -37,27 +39,30 @@ class LLM:
         from google.genai import types
 
         assert self.client is not None
-        f = await self.client.aio.files.upload(file=str(path), config=types.UploadFileConfig(mime_type=mime))
+        f = await asyncio.wait_for(self.client.aio.files.upload(file=str(path), config=types.UploadFileConfig(mime_type=mime)), timeout=REQUEST_TIMEOUT_S)
         for _ in range(240):
             if "PROCESSING" not in str(f.state):
                 break
             await asyncio.sleep(3)
-            f = await self.client.aio.files.get(name=f.name)
+            f = await asyncio.wait_for(self.client.aio.files.get(name=f.name), timeout=REQUEST_TIMEOUT_S)
         if "ACTIVE" not in str(f.state):
             raise RuntimeError(f"file upload not active: {f.state}")
         return f
 
     async def structured(self, *, model: str, system: str, parts: list, schema: type[T],
                          temperature: float = 0.1, retries: int = 4, extra: dict | None = None,
-                         timeout_s: float = 600) -> T:
+                         timeout_s: float | None = None) -> T:
         """One structured Gemini call with retries.
 
-        * timeout_s bounds every attempt: without it a stalled HTTP response blocks the job forever.
+        * Every attempt is bounded: without it a stalled HTTP response blocks the job forever.
+          timeout_s (set by the caller for long jobs, e.g. ~15 min ATC audio) overrides the global
+          GEMINI_REQUEST_TIMEOUT_S default, which would otherwise cut those off.
         * finish_reason MAX_TOKENS raises OutputTruncated immediately instead of re-asking the same thing.
         """
         from google.genai import types
 
         assert self.client is not None, "structured() called in mock mode"
+        limit = timeout_s or REQUEST_TIMEOUT_S
         contents = list(parts)
         last_err: Exception | None = None
         async with self.sem:
@@ -73,7 +78,7 @@ class LLM:
                             temperature=temperature,
                             **(extra or {}),
                         ),
-                    ), timeout=timeout_s)
+                    ), timeout=limit)
                     self.usage["calls"] += 1
                     um = getattr(resp, "usage_metadata", None)
                     if um:
@@ -93,10 +98,11 @@ class LLM:
                     last_err = e
                     contents = list(parts) + [f"Your previous answer failed schema validation:\n{e}\nReturn valid JSON only."]
                 except asyncio.TimeoutError:
-                    last_err = TimeoutError(f"{model}: no response within {timeout_s:.0f} s")
-                    log.warning("LLM call timed out after %.0f s (attempt %d/%d)", timeout_s, attempt + 1, retries)
+                    last_err = TimeoutError(f"Gemini request exceeded {limit:g} seconds ({model})")
+                    log.warning("LLM call timed out after %.0f s (attempt %d/%d)", limit, attempt + 1, retries)
                 except Exception as e:  # network / API errors
                     last_err = e
+                    log.warning("Model request attempt %s/%s failed (%s)", attempt + 1, retries, type(e).__name__)
                     code = getattr(e, "code", None) or getattr(e, "status_code", None)
                     if code not in RETRYABLE and attempt > 0:
                         break
