@@ -3,13 +3,16 @@
 python -m app.resume --case-id atlas-investigator-v1 --max-new-jobs 2 --fusion team
 """
 from __future__ import annotations
+
 import argparse
 import asyncio
 import shutil
 import time
+
 from .orchestrator import CaseRunner
-from .store import CaseStore
 from .schemas import CaseGraph
+from .store import CaseStore
+
 
 async def resume(case_id: str, *, max_new_jobs: int = 2, fusion: str = 'team'):
     store = CaseStore(case_id)

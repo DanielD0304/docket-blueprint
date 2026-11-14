@@ -1,8 +1,11 @@
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import Mock, patch
+
 from test_investigator import graph
+
 from app.resume import resume
+
 
 class ResumeTests(IsolatedAsyncioTestCase):
     async def test_running_case_is_not_duplicated(self):

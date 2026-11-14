@@ -6,8 +6,8 @@ import numpy as np
 import pandas as pd
 
 from app.schemas import CaseConfig, CaseGraph, InvestigatorToolCall, SourceFile
-from app.tools.sensors import analyze_sensors
 from app.tools.investigation import EvidenceTools
+from app.tools.sensors import analyze_sensors
 
 
 class SensorTests(unittest.TestCase):

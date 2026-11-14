@@ -1,5 +1,7 @@
 # Docket Blueprint
 
+[![CI](https://github.com/DanielD0304/docket-blueprint/actions/workflows/ci.yml/badge.svg)](https://github.com/DanielD0304/docket-blueprint/actions/workflows/ci.yml)
+
 Turn a public NTSB docket into a cited timeline, recorder analysis and competing accident explanations. Gemini extracts document and media evidence; Python analyzes flight data; an investigator team researches relationships through read-only tools. Every finding remains inspectable through its source citation.
 
 ![Docket Blueprint — recorded investigation unfolding as a moving graph](docs/images/investigation.gif)
@@ -44,7 +46,7 @@ Without `GEMINI_API_KEY` (or with `MOCK_LLM=1`) the backend runs a **mock extrac
 
 Models: the hackathon key exposes `gemini-4-argon`, `gemini-4-carbon` and `gemini-4-hydrogen`. Defaults are `GEMINI_MODEL_FAST=gemini-4-hydrogen` (fastest in a quick test) and `GEMINI_MODEL_PRO=gemini-4-argon`. The codenames don't say which is which, so this is a guess.
 
-### 2. Frontend (Node 20+)
+### 2. Frontend (Node 22.18+; tests import .ts directly)
 
 ```bash
 cd frontend
@@ -97,7 +99,6 @@ python -m app.refuse --from-case atlas-3591 --case-id atlas-investigator-v1 --ma
 python -m app.refuse --from-case atlas-3591 --case-id atlas-linker-v1 --fusion linker
 # Free tool/replay smoke test (no fabricated causal findings):
 MOCK_LLM=1 python -m app.refuse --from-case atlas-3591 --case-id test-investigator-v1
-python -m unittest discover -s tests -v
 ```
 
 Each experiment requires a **new case ID**, preserves the source case, and records
@@ -118,6 +119,38 @@ private model reasoning. The full-pipeline **Rerun pipeline** button still exist
 ADS-B series with an unresolved `MM:SS` clock are withheld from the UTC Profile
 until their hour is matched against FDR altitude. Live extraction publishes the
 aligned preview as soon as both data sources are available.
+
+## Development and quality gates
+
+Every push and pull request runs [CI](.github/workflows/ci.yml): ruff lint, backend tests,
+frontend type-check, tests and production build, plus a secret scan. CI never calls Gemini.
+
+```bash
+make setup     # venv + backend/requirements-dev.txt + npm ci
+make check     # exactly what CI runs: ruff, tsc, pytest, node --test
+```
+
+Without `make` (Windows):
+
+```bash
+cd backend && .venv/Scripts/python -m pip install -r requirements-dev.txt
+.venv/Scripts/python -m ruff check . && .venv/Scripts/python -m pytest
+cd ../frontend && npm run check && npm run build
+```
+
+| Suite | What it pins down |
+|---|---|
+| `tests/test_pipeline_e2e.py` | Synthetic docket through the full `CaseRunner` (mock LLM): UTC clock, upset detected as a *measured* anomaly, ancillary data excluded, **every atom has a citation** |
+| `tests/test_table.py`, `test_timeparse.py` | NTSB FDR quirks (metadata, units, enum rows, `(CST)` local clock, sparse rows) and ADS-B `MM:SS` hour rollover |
+| `tests/test_ingest.py` | Triage roles, blind mode, ancillary exclusion, zip-slip and nested archives |
+| `tests/test_api.py` | FastAPI routes: health, 404s, local-folder intake, request validation |
+| `tests/test_schema_mirror.py` | `frontend/src/types.ts` cannot drift from `app/schemas.py` |
+| `tests/test_sensors.py`, `test_discovery.py`, `test_team.py`, `test_investigator.py`, ... | Recorder statistics, evidence gating, LLM timeouts and resumable runs |
+| `frontend/tests/*.test.mjs` | Ground-track smoothing, interpolation, profile quality, activity graph |
+
+Tests use pytest: `tests/conftest.py` gives each run an isolated temporary `DATA_DIR`
+and forces the mock LLM, so the suite never touches real cases or a paid API.
+A per-test timeout (pytest-timeout, 120 s) fails a hung async test instead of blocking.
 
 ---
 

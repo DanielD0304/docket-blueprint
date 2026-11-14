@@ -18,7 +18,7 @@ def safe_extract(zip_path: Path, dest: Path, depth: int = 0) -> list[Path]:
             if info.is_dir() or any(j in info.filename for j in _JUNK):
                 continue
             target = (dest / info.filename).resolve()
-            if not str(target).startswith(str(root)):
+            if not target.is_relative_to(root):
                 continue  # zip-slip
             total += info.file_size
             if total > MAX_TOTAL_BYTES:

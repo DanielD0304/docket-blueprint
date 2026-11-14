@@ -2,16 +2,15 @@
 from __future__ import annotations
 
 import asyncio
-import logging
-import random
 import hashlib
 import json
 import logging
+import random
 import tempfile
 import wave
 from pathlib import Path
 
-from ..config import MOCK_DELAY_S, MODEL_FAST, MODEL_PRO, DATA_DIR
+from ..config import DATA_DIR, MOCK_DELAY_S, MODEL_FAST, MODEL_PRO
 from ..ingest.chunker import page_texts, subset_pdf
 from ..ingest.triage import first_pages_text
 from ..schemas import CaseConfig, Extraction, SourceFile, Triage

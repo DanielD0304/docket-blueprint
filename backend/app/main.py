@@ -8,6 +8,7 @@ import re
 import shutil
 import uuid
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,12 +16,11 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .config import CASES_DIR, DATA_DIR, DEMO_CASE_ID, DEMO_MODE, DOCKETS_DIR, MOCK_LLM, MODEL_FAST, MODEL_PRO
-from .ingest.unzip import safe_extract
 from .fusion.clock_anchor import resolve_live_clocks
+from .ingest.unzip import safe_extract
 from .orchestrator import CaseRunner
 from .refuse import prepare_fusion_run
 from .schemas import CaseConfig
-from typing import Literal
 from .store import CaseStore, bus
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -253,6 +253,6 @@ def get_file(case_id: str, file_id: str):
     if not f:
         raise HTTPException(404)
     path = (store.raw_dir / f.rel_path).resolve()
-    if not str(path).startswith(str(store.raw_dir.resolve())):
+    if not path.is_relative_to(store.raw_dir.resolve()):
         raise HTTPException(403)
     return FileResponse(path, filename=f.name, content_disposition_type="inline")

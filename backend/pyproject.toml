@@ -1,0 +1,37 @@
+[project]
+name = "docket-blueprint-backend"
+version = "0.1.0"
+description = "Multi-agent NTSB docket analysis: citation-backed timeline, hypotheses and causal graph."
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+timeout = 120  # pytest-timeout: a hung async test fails instead of blocking CI
+filterwarnings = ["ignore:\\s*on_event is deprecated:DeprecationWarning"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+# pyflakes, pycodestyle, import order, bugbear, pyupgrade
+select = ["F", "E", "W", "I", "B", "UP"]
+ignore = [
+    "E501",  # long lines: dense prompt/regex tables read better unwrapped
+    "E701", "E702",  # compact one-liners are an accepted house style here
+    "E741",  # `l` in tight comprehensions
+    "B008",  # FastAPI `File(...)` / `Form(...)` defaults are idiomatic
+    "B905",  # zip() strictness: lengths are checked explicitly where it matters
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The exact bytes of these files form the shared Gemini extraction cache key (store.extraction_version).
+# Never auto-format them: a cosmetic change would force a paid re-extraction of every docket.
+"app/agents/atoms.py" = ["I001"]
+"app/agents/prompts.py" = ["I001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app"]
