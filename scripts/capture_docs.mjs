@@ -8,7 +8,7 @@ const output = fileURLToPath(new URL("../docs/images/", import.meta.url));
 const base = process.env.DOCS_BASE_URL || "http://127.0.0.1:5173/";
 const caseId = process.env.DOCS_CASE_ID || "atlas-team-reviewed-v1";
 const sensorCase = process.env.DOCS_SENSOR_CASE_ID || caseId;
-const selectors = { home:".home", flight:".console", profile:".sheet", sensors:".sensor-view", causal:".causal-graph", hypotheses:".hypotheses-view", activity:".living-node", sources:".sources" };
+const selectors = { home:".home", flight:".console", profile:".sheet", sensors:".sx-explorer", causal:".causal-graph", hypotheses:".hypotheses-view", activity:".living-node", sources:".sources" };
 await mkdir(output, { recursive:true });
 const browser = await chromium.launch({ ...(process.env.CHROMIUM_PATH ? {executablePath:process.env.CHROMIUM_PATH}:{}), args:["--no-sandbox"] });
 try {
@@ -22,8 +22,8 @@ try {
       if(view==="home")await page.getByText("Drop docket ZIP or files",{exact:true}).waitFor({timeout:60000});
       else await page.waitForSelector(selector,{timeout:60000});
       if(view==="sensors") {
-        await page.getByPlaceholder("Column, unit or source").fill("Accel Vert");
-        await page.locator(".sensor-choice").filter({hasText:"Accel Vert"}).first().click();
+        await page.getByRole("textbox",{name:"Find sensor"}).fill("Accel Vert");
+        await page.locator(".sx-channel").filter({hasText:"Accel Vert"}).first().click();
       }
       if(view==="sources")await page.locator(".doc").filter({hasText:"COCKPIT VOICE RECORDER"}).first().click();
       if(view==="activity") {await page.getByRole("button",{name:"Show result",exact:true}).click();await page.waitForTimeout(3000);await page.getByRole("button",{name:"Fit graph",exact:true}).click();}

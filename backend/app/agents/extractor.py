@@ -4,9 +4,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import hashlib
+import json
+import logging
+import tempfile
+import wave
 from pathlib import Path
 
-from ..config import MOCK_DELAY_S, MODEL_FAST, MODEL_PRO
+from ..config import MOCK_DELAY_S, MODEL_FAST, MODEL_PRO, DATA_DIR
 from ..ingest.chunker import page_texts, subset_pdf
 from ..ingest.triage import first_pages_text
 from ..schemas import CaseConfig, Extraction, SourceFile, Triage
@@ -97,6 +102,11 @@ async def extract_media(path: Path, sf: SourceFile, cfg: CaseConfig) -> Extracti
     llm = get_llm()
     if llm.mock:
         return Extraction(summary=f"[mock] {sf.kind} {sf.name} (needs Gemini)")
+    if sf.kind == "audio" and sf.ext == ".wav":
+        with wave.open(str(path)) as audio:
+            duration = audio.getnframes() / audio.getframerate()
+        if duration > 600:
+            return await extract_long_wav(path, sf, cfg)
     from google.genai import types
 
     if sf.role == "simulation":
@@ -127,3 +137,45 @@ async def extract_image(path: Path, sf: SourceFile, cfg: CaseConfig) -> Extracti
     mime = IMAGE_MIME.get(sf.ext, "image/jpeg")
     parts = [types.Part.from_bytes(data=path.read_bytes(), mime_type=mime), f"Image file: '{sf.name}'"]
     return await llm.structured(model=MODEL_FAST, system=IMAGE_PROMPT + case_brief(cfg), parts=parts, schema=Extraction)
+
+
+async def extract_long_wav(path: Path, sf: SourceFile, cfg: CaseConfig) -> Extraction:
+    """Bound long recordings to five-minute requests; retain original-file seek positions."""
+    from .atoms import media_seconds
+    key = hashlib.sha256((sf.sha256 + MODEL_PRO + MEDIA_BASE + json.dumps(MEDIA_PROMPTS) + case_brief(cfg)).encode()).hexdigest()
+    cache = DATA_DIR / "media_chunks" / key
+    cache.mkdir(parents=True, exist_ok=True)
+    results = []
+    with tempfile.TemporaryDirectory(prefix="docket-audio-") as folder:
+        with wave.open(str(path)) as source:
+            params = source.getparams()
+            frames_per_chunk = params.framerate * 300
+            chunks = []
+            for start in range(0, params.nframes, frames_per_chunk):
+                end = min(params.nframes, start + frames_per_chunk)
+                clip = Path(folder) / f"{start}-{end}.wav"
+                with wave.open(str(clip), "wb") as out:
+                    out.setparams(params)
+                    out.writeframes(source.readframes(end-start))
+                chunks.append((start / params.framerate, clip))
+        async def one(offset, clip):
+            saved = cache / f"{int(offset)}.json"
+            if saved.exists():
+                result = Extraction.model_validate_json(saved.read_text())
+            else:
+                result = await extract_media(clip, sf, cfg)
+                temp = saved.with_suffix('.tmp')
+                temp.write_text(result.model_dump_json())
+                temp.replace(saved)
+            result = result.model_copy(deep=True)
+            for atom in [*result.events, *result.anomalies, *result.facts]:
+                for citation in atom.citations:
+                    seconds = media_seconds(citation.media_time)
+                    if seconds is not None:
+                        citation.media_time = str(offset + seconds)
+            logging.getLogger(__name__).warning("Audio chunk %ss complete (%s)", int(offset), sf.file_id)
+            return result
+        results = await asyncio.gather(*(one(offset, clip) for offset, clip in chunks))
+    return Extraction(summary="Long recording analyzed in five-minute chunks. " + " ".join(r.summary for r in results)[:1800],
+        events=[e for r in results for e in r.events], anomalies=[a for r in results for a in r.anomalies],
+        entities=[e for r in results for e in r.entities], facts=[f for r in results for f in r.facts])

@@ -36,6 +36,8 @@ export default function App() {
   });
   const [play, setPlay] = useState<PlayState>({ playing: false, speed: 4 });
   const [focus, setFocus] = useState<SourceFocus | null>(null);
+  const [demoPlayback,setDemoPlayback] = useState(false);
+  const autoReplayed = useRef<string | null>(null);
   const [inspOpen, setInspOpen] = useState(true);
 
   useEffect(() => {
@@ -67,24 +69,32 @@ export default function App() {
   }, []);
   const openSource = useCallback((f: SourceFocus) => { setFocus(f); setView("sources"); }, []);
 
-  const open = (id: string) => { location.hash = `case=${encodeURIComponent(id)}`; };
+  const replayDemo = useCallback(() => {
+    setDemoPlayback(true);setView("sources");
+    void live.replay(18,false,phase=>setView(phase)).catch(e=>alert(e.message));
+  },[live.replay]);
+  useEffect(()=>{
+    if(!caseId)autoReplayed.current=null;
+    if(caseId && g?.case_id === caseId && g.status === "done" && live.mode === "static" && location.hash.includes("demoReplay=1") && autoReplayed.current!==caseId){
+      autoReplayed.current=caseId;replayDemo();
+    }
+  },[caseId,g?.case_id,g?.status,live.mode,replayDemo]);
+  const open = (id: string, demoReplay = false) => { location.hash = `case=${encodeURIComponent(id)}${demoReplay?"&view=sources&demoReplay=1":""}`; };
   const home = () => { location.hash = ""; setSelected(null); };
 
   if ((!caseId && !sampleOn) || !g) return <Home open={open} openSample={() => (location.hash = "sample")} />;
 
   const actions = !sampleOn && (
     <>
-      <button className="btn" onClick={() => { setView("sources"); live.replay(25); }} title="Replay the recorded swarm run">Replay swarm</button>
-      <button className="btn" disabled={!g.investigation?.steps.length}
-        title={g.investigation?.steps.length ? "Replay saved investigator questions, tools, evidence and conclusions; no model calls" : "No investigator trace was saved for this case. The original linker saved conclusions only."}
-        onClick={() => { setView("activity"); live.replay(35, true); }}>Replay investigation{!g.investigation?.steps.length ? " · no trace" : ""}</button>
+      {location.hash.includes("demoReplay=1") && <span className="label" title="This is the configured recorded case; uploaded files are not analyzed">Recorded demo</span>}
+      <button className="btn" disabled={live.mode === "replay" || g.status !== "done" || !g.files.length} onClick={replayDemo} title="Replay recorded sources, then the investigator graph; no model calls">{live.mode === "replay" ? "Replaying demo…" : "Replay demo"}</button>
       {g.status === "done" && <button className="btn" onClick={() => investigateCase(g.case_id).then((id) => { setView("activity"); open(id); }).catch((e) => alert(e.message))}
         title="Rerun the investigator team using saved evidence. Creates a separate case; does not refresh sensor detection.">Rerun fusion</button>}
-      <button className="btn" onClick={() => rerunCase(g.case_id).then(() => location.reload())} title="Rerun the pipeline, refresh outdated sensor detection, and reuse valid extraction caches.">Rerun pipeline</button>
+      <button className="btn" disabled={g.status === "running" || live.mode === "replay"} onClick={() => rerunCase(g.case_id).then(() => location.reload()).catch(e=>alert(e.message))} title="Rerun the pipeline, refresh outdated sensor detection, and reuse valid extraction caches.">Rerun pipeline</button>
     </>
   );
 
-  const showInspector = inspOpen && (!(current === "activity" || current === "hypotheses") || selected !== null);
+  const showInspector = inspOpen && (!(current === "activity" || current === "hypotheses" || current === "sensors") || selected !== null);
   return (
     <div className={`console ${showInspector ? "" : "no-insp"}`}>
       <Header g={g} onHome={home} actions={actions} />
@@ -105,7 +115,7 @@ export default function App() {
           {current === "causal" && <CausalGraph anomalies={g.anomalies} edges={g.causal_edges} hypotheses={g.hypotheses} selected={selected} onSelect={select}
             hypothesisId={null} onHypothesisSelect={(id) => { setHypothesisId(id); setSelected(null); setView("hypotheses"); }} />}
           {current === "hypotheses" && <Hypotheses g={g} hypothesisId={hypothesis?.id ?? null} onChoose={(id) => { setHypothesisId(id); setSelected(null); }} onSelect={select} openSource={openSource} />}
-          {current === "activity" && <AgentActivity g={g} openSource={openSource} replay={() => live.replay(35, true)} />}
+          {current === "activity" && <AgentActivity externalPlayback={demoPlayback} g={g} openSource={openSource} replay={() => live.replay(35, true)} />}
           {current === "sources" && <Sources live={live} focus={focus} setFocus={setFocus} onSelect={select} />}
         </div>
         {current !== "activity" && <TimelineStrip g={g} cursor={cursor} setCursor={setCursor} play={play} setPlay={setPlay} selected={selected} onSelect={select} />}

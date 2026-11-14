@@ -193,6 +193,10 @@ class CaseRunner:
                 anchor_mmss(preview, self.mmss_files, self.track_file)
                 self.emit("clock_sync", series=[s.model_dump() for s in preview.series],
                           events=[e.model_dump() for e in preview.events], track=[p.model_dump() for p in preview.track], clocks=preview.clocks)
+        except asyncio.CancelledError:
+            f.error = "Extraction interrupted; resume this cached run."
+            self.emit("job", job_id=job.job_id, file_id=f.file_id, status="error", error=f.error)
+            raise
         except Exception as e:
             log.exception("job %s failed", job.job_id)
             f.error = str(e)[:500]
@@ -325,7 +329,7 @@ class CaseRunner:
         if self.fusion in ("team", "investigator"):
             def progress(type_, **data):
                 self.emit(type_, **data)
-                self.store.save_graph(g)
+                self.save_throttled()
             r = await (investigate_team if self.fusion == "team" else investigate)(g, self.store.raw_dir, max_turns=self.max_turns, emit=progress)
         else:
             r = await link(g)
@@ -360,6 +364,7 @@ class CaseRunner:
         except asyncio.CancelledError:
             g = self.graph
             g.status = "error"
+            g.stage = "error"
             g.stats["error"] = "Run interrupted by shutdown or cancellation. Rerun pipeline to resume cached jobs."
             self.store.save_graph(g)
             self.emit("error", error=g.stats["error"])
@@ -367,6 +372,7 @@ class CaseRunner:
         except Exception as e:
             g = self.graph
             g.status = "error"
+            g.stage = "error"
             g.stats["error"] = str(e)
             self.store.save_graph(g)
             self.emit("error", error=str(e), trace=traceback.format_exc()[-2000:])

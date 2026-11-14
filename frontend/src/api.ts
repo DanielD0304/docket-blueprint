@@ -1,6 +1,6 @@
 import type { CaseGraph, StreamMsg } from "./types";
 
-export async function health(): Promise<{ ok: boolean; mock: boolean; models: { fast: string; pro: string } }> {
+export async function health(): Promise<{ ok: boolean; mock: boolean; demo?: boolean; demo_case_id?: string | null; models: { fast: string; pro: string } }> {
   const r = await fetch("/api/health");
   if (!r.ok) throw new Error("backend offline");
   return r.json();
@@ -22,25 +22,28 @@ export async function getEvents(id: string): Promise<StreamMsg[]> {
   return r.ok ? r.json() : [];
 }
 
-export async function uploadCase(files: File[], cfg: Record<string, string | number | boolean>): Promise<string> {
+export interface IntakeResult { case_id: string; demo?: boolean }
+
+export async function uploadCase(files: File[], cfg: Record<string, string | number | boolean>): Promise<IntakeResult> {
   const fd = new FormData();
   files.forEach((f) => fd.append("files", f, f.name));
   Object.entries(cfg).forEach(([k, v]) => v !== "" && v !== null && fd.append(k, String(v)));
   const r = await fetch("/api/cases", { method: "POST", body: fd });
   if (!r.ok) throw new Error(await r.text());
-  return (await r.json()).case_id;
+  return r.json();
 }
 
-export async function localCase(path: string, config: Record<string, any>): Promise<string> {
+export async function localCase(path: string, config: Record<string, any>): Promise<IntakeResult> {
   const r = await fetch("/api/cases/local", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path, config }),
   });
   if (!r.ok) throw new Error(await r.text());
-  return (await r.json()).case_id;
+  return r.json();
 }
 
 export async function rerunCase(id: string): Promise<void> {
-  await fetch(`/api/cases/${id}/rerun`, { method: "POST" });
+  const r=await fetch(`/api/cases/${id}/rerun`, { method: "POST" });
+  if(!r.ok)throw new Error(await r.text());
 }
 
 export async function investigateCase(id: string): Promise<string> {

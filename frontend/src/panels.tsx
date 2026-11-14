@@ -11,7 +11,7 @@ import type { SourceFocus } from "./views/Sources";
 const STAGES = ["ingest", "triage", "extract", "verify", "align", "dedup", "investigate", "done"];
 
 export function Header({ g, onHome, actions }: { g: CaseGraph; onHome: () => void; actions?: React.ReactNode }) {
-  const idx = STAGES.indexOf(g.stage === "link" ? "investigate" : g.stage);
+  const idx = g.status === "error" ? -1 : STAGES.indexOf(g.stage === "link" ? "investigate" : g.stage);
   const c = g.config;
   return (
     <div className="header">
@@ -20,6 +20,7 @@ export function Header({ g, onHome, actions }: { g: CaseGraph; onHome: () => voi
       <div className="hcell"><span className="label">NTSB</span><span>{c.ntsb_id ?? "—"}</span></div>
       <div className="hcell"><span className="label">Aircraft</span><span>{c.aircraft ?? "—"}</span></div>
       <div className="pipeline">
+        {g.status === "error" && <span className="label" style={{color:"var(--crit)"}}>Run stopped · resume cached jobs</span>}
         {STAGES.map((s, i) => (
           <div key={s} className={`stage ${i < idx || g.stage === "done" ? "done" : i === idx ? "active" : ""}`} title={s}>
             <span className="dot" /><span className="sname">{s}</span>

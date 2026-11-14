@@ -50,7 +50,7 @@ Read the overall conclusion, compare competing explanations, and see how evidenc
 
 Five agent hubs represent the sequence, systems and human-factors specialists, challenger and lead. Source, finding and result nodes emerge as recorded work progresses; links represent reads and shared cited evidence. The force layout changes as the network grows. Pause, scrub, drag nodes, zoom, or select a node for its evidence. Labels appear around current activity, hover and selection to reduce clutter.
 
-**Replay from start** animates saved actions without calling Gemini. **Show result** reveals the completed network. This is a public record of tool activity and outputs, not private model reasoning. A screenshot captures one state of the animation; run the view to see the graph evolve.
+**Replay demo** first replays source processing, then switches to the graph without calling Gemini. **Show result** reveals the completed network. This is a public record of tool activity and outputs, not private model reasoning. A screenshot captures one state of the animation; run the view to see the graph evolve.
 
 ## 8. Sources — inspect processing and original material
 

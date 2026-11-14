@@ -110,7 +110,7 @@ and investigator page reads still require the original docket files.
 
 In the UI, **Rerun fusion** creates a separate team experiment through
 `POST /api/cases/{id}/fusion-runs` (`{"fusion":"team","max_turns":8}`).
-The Agent activity view shows an evolving node graph of public tool activity, cited evidence and results. **Replay investigation** animates just these steps without model
+The Agent activity view shows an evolving node graph of public tool activity, cited evidence and results. **Replay demo** animates just these steps without model
 calls. Both the trace and source links persist in the graph and event log, and
 CLI runs stream live to the browser. The trace is a public activity record, not
 private model reasoning. The full-pipeline **Rerun pipeline** button still exists.
@@ -295,3 +295,18 @@ cross-sensor consistency remain separate analyses.
 Extraction waits for every job, so the last PDF chunk or media request can keep the stage open after most files finish. Check Sources for unfinished jobs. Gemini requests have a configurable per-request limit (`GEMINI_REQUEST_TIMEOUT_S`, default 480 seconds) and bounded retries; media processing can also add waiting time. A request timeout is not a total-case deadline.
 
 Runs currently execute in the backend/CLI process, not a durable job service. Restarting that process interrupts its work. Graceful cancellation now saves an error with a resume instruction; hard termination can still leave stale `running` metadata. **Rerun pipeline** reuses valid per-job caches and retries missing work. Do not delete caches to recover an interrupted run. Durable worker leases and crash reconciliation remain open work.
+
+For a stopped case with a saved inventory, a guarded CLI recovery avoids inventory and triage entirely and limits new model jobs:
+
+```bash
+cd backend
+python -m app.resume --case-id YOUR_CASE --max-new-jobs 2 --fusion team
+```
+
+This refuses cases still marked running, preserves the previous graph/event log as local backup files, restores cached payloads once, retries missing jobs, then saves a complete extraction snapshot and runs fusion. It aborts before starting if the number of missing model jobs exceeds the limit. Establish that the previous worker actually exited before changing an interrupted case's status; a server draining on shutdown may still be executing requests.
+
+### Recorded demo mode
+
+Start the backend with `DEMO_MODE=1 DEMO_CASE_ID=<completed-case-id>` (or set these in `backend/.env`). The selected case must already be complete and retain its event log. Uploading files or choosing **Analyse local folder** then opens that recorded case and automatically runs the single **Replay demo** action: a fast source-processing replay followed by the animated investigator graph, compressed into about 18 seconds. Replay makes no model calls. Intake is labelled recorded demo mode; it does not claim to analyze the newly supplied folder. Outside this flag, intake performs real analysis.
+
+Long WAV recordings are now divided into five-minute requests, with at most three media requests in flight. Chunk outputs are cached under ignored `data/media_chunks/`, and citation seek positions are shifted back to the original recording. A failed chunk can be retried without discarding completed chunks.

@@ -98,3 +98,11 @@ an interval pauses playback and moves the common cursor. Sampling gaps break the
 plot and state runs; no state is asserted between unsupported observations.
 Statistical findings are labelled as candidates, not fault probabilities. Old
 cases explain that a pipeline re-run is required to generate sensor analysis.
+
+The Sensors explorer uses channel sparklines, a shared-axis signal chart, colored
+state intervals, and a separate anomaly marker lane. Full-recording, five-minute,
+and sixty-second ranges center on the playhead. Hover inspects a moment without
+moving playback; clicking seeks. Episode cards and state segments reveal one
+focused evidence panel with row citations. The case inspector stays hidden by
+default in this view to give the chart space. Discrete-state colors distinguish
+recorded values and do not encode severity.

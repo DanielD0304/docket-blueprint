@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from .config import CASES_DIR, DATA_DIR, DOCKETS_DIR, MOCK_LLM, MODEL_FAST, MODEL_PRO
+from .config import CASES_DIR, DATA_DIR, DEMO_CASE_ID, DEMO_MODE, DOCKETS_DIR, MOCK_LLM, MODEL_FAST, MODEL_PRO
 from .ingest.unzip import safe_extract
 from .fusion.clock_anchor import resolve_live_clocks
 from .orchestrator import CaseRunner
@@ -77,7 +77,16 @@ def _start(case_id: str) -> None:
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "mock": MOCK_LLM, "models": {"fast": MODEL_FAST, "pro": MODEL_PRO}, "data_dir": str(DATA_DIR)}
+    return {"ok": True, "mock": MOCK_LLM, "demo": DEMO_MODE, "demo_case_id": DEMO_CASE_ID if DEMO_MODE else None,
+            "models": {"fast": MODEL_FAST, "pro": MODEL_PRO}, "data_dir": str(DATA_DIR)}
+
+
+def _demo_intake():
+    store = CaseStore(DEMO_CASE_ID)
+    graph = store.load_graph()
+    if graph is None or graph.status != "done" or not store.events_path.exists() or not store.events_path.stat().st_size:
+        raise HTTPException(409, "Demo requires a completed DEMO_CASE_ID with saved events")
+    return {"case_id": DEMO_CASE_ID, "demo": True}
 
 
 @app.post("/api/cases")
@@ -90,6 +99,8 @@ async def create_case(
     local_utc_offset_h: float = Form(0.0),
     blind_mode: bool = Form(True),
 ):
+    if DEMO_MODE:
+        return _demo_intake()
     cfg = CaseConfig(title=title, ntsb_id=ntsb_id, date=date, aircraft=aircraft,
                      local_utc_offset_h=local_utc_offset_h, blind_mode=blind_mode)
     case_id = _new_case_id(cfg)
@@ -117,6 +128,8 @@ class LocalCase(BaseModel):
 @app.post("/api/cases/local")
 async def create_local_case(body: LocalCase):
     """Point at an already-downloaded docket folder (no copy). Handy for the 1 GB+ dockets."""
+    if DEMO_MODE:
+        return _demo_intake()
     p = Path(body.path).expanduser()
     if not p.is_absolute():  # short names like "DCA19MA086" are looked up in DATA_DIR/dockets
         p = DOCKETS_DIR / p if (DOCKETS_DIR / p).is_dir() else p
@@ -135,6 +148,9 @@ async def rerun(case_id: str):
     store = CaseStore(case_id)
     if not store.meta_path.exists():
         raise HTTPException(404)
+    current = store.load_graph()
+    if (case_id in _tasks and not _tasks[case_id].done()) or (current and current.status == "running"):
+        raise HTTPException(409, "case already running; do not start a second worker")
     store.events_path.unlink(missing_ok=True)
     _start(case_id)
     return {"case_id": case_id}

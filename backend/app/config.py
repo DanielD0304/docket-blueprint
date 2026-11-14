@@ -28,3 +28,7 @@ CASES_DIR.mkdir(parents=True, exist_ok=True)
 
 # Citation verification threshold (rapidfuzz partial_ratio, 0-100).
 VERIFY_THRESHOLD = 85
+
+# Demo intake replays an explicitly configured completed case; no new extraction.
+DEMO_MODE = os.getenv("DEMO_MODE", "0") == "1"
+DEMO_CASE_ID = os.getenv("DEMO_CASE_ID", "atlas-team-reviewed-v1")
