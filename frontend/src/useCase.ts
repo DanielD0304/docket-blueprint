@@ -22,7 +22,7 @@ type Action =
   | { type: "batch"; msgs: StreamMsg[] };
 
 const empty = (g: CaseGraph): CaseGraph => ({
-  ...g, events: [], anomalies: [], track: [], series: [], causal_edges: [], hypotheses: [], open_questions: [], investigation: null,
+  ...g, events: [], anomalies: [], track: [], series: [], sensors: [], causal_edges: [], hypotheses: [], open_questions: [], investigation: null,
   files: g.files.map((f) => ({ ...f, status: f.excluded ? "skipped" : "queued", jobs_done: 0, atoms: 0 })),
 });
 
@@ -64,7 +64,7 @@ function apply(s: LiveState, m: StreamMsg): LiveState {
       const anIds = new Set(g.anomalies.map((a) => a.id));
       const events = g.events.concat((m.events as Event[]).filter((e) => !evIds.has(e.id) && (fresh.add(e.id), true)));
       const anomalies = g.anomalies.concat((m.anomalies as Anomaly[]).filter((a) => !anIds.has(a.id) && (fresh.add(a.id), true)));
-      return { ...s, fresh, graph: { ...g, events, anomalies, track: g.track.concat(m.track ?? []), series: g.series.concat(m.series ?? []) } };
+      return { ...s, fresh, graph: { ...g, events, anomalies, track: g.track.concat(m.track ?? []), series: g.series.concat(m.series ?? []), sensors: [...new Map([...(g.sensors ?? []), ...(m.sensors ?? [])].map((x) => [x.sensor_id, x])).values()] } };
     }
     case "fusion":
       return { ...s, fusion: { ...s.fusion, [m.step]: m.result },
@@ -75,6 +75,8 @@ function apply(s: LiveState, m: StreamMsg): LiveState {
       const prior = g.investigation;
       const steps = [...(prior?.steps ?? []).filter((x) => x.id !== m.step.id), m.step];
       return { ...s, graph: { ...g, investigation: {
+        ...prior, mode: m.mode ?? prior?.mode, agents: m.agents ?? prior?.agents,
+        coverage: m.coverage ?? prior?.coverage, conclusion: m.conclusion ?? prior?.conclusion,
         model: prior?.model ?? "Gemini", max_turns: m.max_turns, turns: m.turns,
         tool_calls: m.tool_calls, rejected_claims: prior?.rejected_claims ?? 0, status: m.status, steps,
       } }, log: pushLog(s.log, { ts, kind: "fusion", text: `◇ ${m.step.title}` }) };

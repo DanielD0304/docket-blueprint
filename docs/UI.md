@@ -88,3 +88,13 @@ The Profile flags sustained repeated 0/384-kt source runs as suspect data, leave
 gaps in the main airspeed line by default, and offers **Show raw suspect samples**.
 This is a display-quality flag, not a finding of aircraft overspeed or failure.
 5. **Sources**: the swarm, the log, and a media/PDF preview.
+
+
+**Sensors** is a per-channel view of recorder state and anomaly detection. A
+searchable source/column list retains separate sensors from separate files.
+Selecting a sensor shows its sampled profile, cursor state, native-row findings,
+state intervals, cadence, method, limitations, and source-row citations. Clicking
+an interval pauses playback and moves the common cursor. Sampling gaps break the
+plot and state runs; no state is asserted between unsupported observations.
+Statistical findings are labelled as candidates, not fault probabilities. Old
+cases explain that a pipeline re-run is required to generate sensor analysis.

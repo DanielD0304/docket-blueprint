@@ -5,6 +5,7 @@ import { Header, Inspector } from "./panels";
 import { makeSample } from "./sample";
 import { CausalGraph } from "./sheets/CausalGraph";
 import { Profile } from "./sheets/Profile";
+import { Sensors } from "./views/Sensors";
 import type { Selection } from "./types";
 import { useCase } from "./useCase";
 import { FlightView } from "./views/FlightView";
@@ -13,8 +14,8 @@ import { AgentActivity } from "./views/AgentActivity";
 import { Sources, type SourceFocus } from "./views/Sources";
 import { TimelineStrip, type PlayState } from "./views/TimelineStrip";
 
-type View = "flight" | "profile" | "causal" | "hypotheses" | "activity" | "sources";
-const VIEWS: [View, string][] = [["flight", "Flight"], ["profile", "Profile"], ["causal", "Causal graph"], ["hypotheses", "Hypotheses"], ["activity", "Agent activity"], ["sources", "Sources"]];
+type View = "sensors" | "flight" | "profile" | "causal" | "hypotheses" | "activity" | "sources";
+const VIEWS: [View, string][] = [["flight", "Flight"], ["profile", "Profile"], ["sensors", "Sensors"], ["causal", "Causal graph"], ["hypotheses", "Hypotheses"], ["activity", "Agent activity"], ["sources", "Sources"]];
 
 function readHash(): string | null {
   const m = location.hash.match(/case=([^&]+)/);
@@ -77,14 +78,15 @@ export default function App() {
       <button className="btn" disabled={!g.investigation?.steps.length}
         title={g.investigation?.steps.length ? "Replay saved investigator questions, tools, evidence and conclusions; no model calls" : "No investigator trace was saved for this case. The original linker saved conclusions only."}
         onClick={() => { setView("activity"); live.replay(35, true); }}>Replay investigation{!g.investigation?.steps.length ? " · no trace" : ""}</button>
-      {g.status === "done" && <button className="btn" onClick={() => investigateCase(g.case_id).then((id) => { setView("sources"); open(id); }).catch((e) => alert(e.message))}
-        title="New investigation from base extractions; original case preserved">Investigate again</button>}
-      <button className="btn" onClick={() => rerunCase(g.case_id).then(() => location.reload())} title="Re-run pipeline (extraction cached)">Re-run</button>
+      {g.status === "done" && <button className="btn" onClick={() => investigateCase(g.case_id).then((id) => { setView("activity"); open(id); }).catch((e) => alert(e.message))}
+        title="Rerun the investigator team using saved evidence. Creates a separate case; does not refresh sensor detection.">Rerun fusion</button>}
+      <button className="btn" onClick={() => rerunCase(g.case_id).then(() => location.reload())} title="Rerun the pipeline, refresh outdated sensor detection, and reuse valid extraction caches.">Rerun pipeline</button>
     </>
   );
 
+  const showInspector = inspOpen && (!(current === "activity" || current === "hypotheses") || selected !== null);
   return (
-    <div className={`console ${inspOpen ? "" : "no-insp"}`}>
+    <div className={`console ${showInspector ? "" : "no-insp"}`}>
       <Header g={g} onHome={home} actions={actions} />
       <div className="center">
         <div className="tabs">
@@ -99,15 +101,16 @@ export default function App() {
         <div className="viewport frame">
           {current === "flight" && <FlightView g={g} cursor={cursor} selected={selected} onSelect={select} speed={play.speed} />}
           {current === "profile" && <Profile series={g.series} unresolvedFiles={[...new Set(g.events.filter((e) => e.time.aligned_by === "mmss" && g.clocks[e.source_files[0]] == null).map((e) => e.source_files[0]))]} anomalies={g.anomalies} cursor={cursor} setCursor={(t) => t !== null && !play.playing && setCursor(t)} onSelect={select} openSource={(id) => openSource({ file_id: id })} />}
+          {current === "sensors" && <Sensors g={g} cursor={cursor} setCursor={(t) => { setPlay((p) => ({ ...p, playing: false })); setCursor(t); }} openSource={openSource} />}
           {current === "causal" && <CausalGraph anomalies={g.anomalies} edges={g.causal_edges} hypotheses={g.hypotheses} selected={selected} onSelect={select}
             hypothesisId={null} onHypothesisSelect={(id) => { setHypothesisId(id); setSelected(null); setView("hypotheses"); }} />}
           {current === "hypotheses" && <Hypotheses g={g} hypothesisId={hypothesis?.id ?? null} onChoose={(id) => { setHypothesisId(id); setSelected(null); }} onSelect={select} openSource={openSource} />}
           {current === "activity" && <AgentActivity g={g} openSource={openSource} replay={() => live.replay(35, true)} />}
           {current === "sources" && <Sources live={live} focus={focus} setFocus={setFocus} onSelect={select} />}
         </div>
-        <TimelineStrip g={g} cursor={cursor} setCursor={setCursor} play={play} setPlay={setPlay} selected={selected} onSelect={select} />
+        {current !== "activity" && <TimelineStrip g={g} cursor={cursor} setCursor={setCursor} play={play} setPlay={setPlay} selected={selected} onSelect={select} />}
       </div>
-      {inspOpen && <Inspector g={g} selected={selected} onSelect={select} cursor={cursor} openSource={openSource} />}
+      {showInspector && <Inspector g={g} selected={selected} onSelect={select} cursor={cursor} openSource={openSource} />}
     </div>
   );
 }

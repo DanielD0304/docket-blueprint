@@ -48,6 +48,9 @@ def _merge_anomalies(anoms: list[Anomaly]) -> list[Anomaly]:
         if not a.observations and a.time and a.time.t_s is not None:
             a.observations = [AnomalyObservation(start_s=a.time.t_s, citations=list(a.citations))]
         twin = next((o for o in out if o.domain == a.domain and
+                     # Shared detector boilerplate is not evidence that two
+                     # different sensor channels describe the same finding.
+                     ("-discovery-" not in a.id and "-discovery-" not in o.id or a.title == o.title) and
                      fuzz.token_set_ratio(o.title + " " + o.observed, a.title + " " + a.observed) >= SIM), None)
         if twin is None:
             out.append(a)

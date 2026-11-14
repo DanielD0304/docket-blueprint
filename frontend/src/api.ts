@@ -46,7 +46,7 @@ export async function rerunCase(id: string): Promise<void> {
 export async function investigateCase(id: string): Promise<string> {
   const r = await fetch(`/api/cases/${id}/fusion-runs`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fusion: "investigator", max_turns: 8 }),
+    body: JSON.stringify({ fusion: "team", max_turns: 8 }),
   });
   if (!r.ok) throw new Error(await r.text());
   return (await r.json()).case_id;

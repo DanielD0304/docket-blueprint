@@ -25,7 +25,7 @@ def main() -> None:
     ap.add_argument("--offset", type=float, default=0.0, help="local time = UTC + offset hours")
     ap.add_argument("--no-blind", action="store_true")
     ap.add_argument("--case-id")
-    ap.add_argument("--fusion", choices=("investigator", "linker"), default="investigator")
+    ap.add_argument("--fusion", choices=("team", "investigator", "linker"), default="investigator")
     ap.add_argument("--max-turns", type=int, choices=range(2, 21), default=8)
     a = ap.parse_args()
     cfg = CaseConfig(title=a.title, ntsb_id=a.ntsb, date=a.date, aircraft=a.aircraft,

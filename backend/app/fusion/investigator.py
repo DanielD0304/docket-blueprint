@@ -10,7 +10,7 @@ from ..agents.extractor import case_brief
 from ..agents.llm import get_llm
 from ..config import MODEL_PRO
 from ..schemas import (CaseGraph, CausalEdge, Hypothesis, InvestigationReport, InvestigationStep,
-                       InvestigatorDecision, InvestigatorToolCall, LinkerOutput)
+                       InvestigatorDecision, InvestigatorToolCall, LinkerOutput, InvestigationConclusion, InvestigationFinding)
 from ..tools.investigation import EvidenceTools
 from .linker import DEFAULT_LAYER
 
@@ -31,6 +31,9 @@ Tools (all arguments are named fields in each tool request):
 - timeline_window: start_s, end_s, optional file_id. Returns up to 20 timed, cited
   events/anomalies across sources. Narrow the window if truncated.
 - read_page: file_id and 1-based page. Returns exact source passages with evidence IDs.
+- sensor_window: series_name = exact sensor_id or column from sensors overview; file_id, start_s, end_s.
+  Returns native-row per-sensor states, unusual changes, rare levels and sampling gaps.
+  States are descriptive regimes; statistical candidates are not faults or probabilities.
 - recorder_window: series_name, file_id, start_s, end_s (UTC seconds from midnight).
   Python computes statistics from cached/downsampled samples. Never calculate recorder
   arithmetic yourself or infer exact peaks/transitions from those downsampled statistics.
@@ -42,6 +45,7 @@ evidence_ids. Claims without inspected, cited evidence will be discarded. Use co
 For each hypothesis, provide contributions: evidence_id, role (supports/challenges/context),
 and a specific explanation of HOW that item bears on the hypothesis. Include relevant facts,
 events, source passages and recorder checks, even if they have no causal graph edge.
+Include conclusion with an explicit overall summary, inspected evidence_ids, preferred_hypothesis_title, alternative_hypothesis_titles, cited findings and limitations. State the strongest supported explanation and why alternatives are less supported. If evidence is insufficient, explain that explicitly.
 Give 2-5 hypotheses when evidence permits; include contrary evidence and open questions.
 Do not create new factual atoms. You cannot access excluded/final-report sources.
 Stop when the core links are supported or the turn budget is reached. On the final turn,
@@ -187,7 +191,29 @@ def apply_conclusion(graph, out, tools, report, step):
         payload = {**h.model_dump(), "evidence_ids": ids, "contributions": contributions}
         graph.hypotheses.append(Hypothesis(id=f"hy-{len(graph.hypotheses)}", **payload, citations=cs))
         step(report.turns, "conclusion", h.title, detail=h.narrative, evidence_ids=ids, citations=cs)
+    if out.conclusion is not None:
+        c = out.conclusion
+        ids = list(dict.fromkeys(c.evidence_ids))
+        if ids and all(i in tools.seen for i in ids) and citations(ids):
+            findings = []
+            for f in c.findings:
+                if f.evidence_ids and all(i in tools.seen for i in f.evidence_ids) and citations(f.evidence_ids):
+                    findings.append(InvestigationFinding(id=f"finding-{len(findings)}", **f.model_dump(), citations=citations(f.evidence_ids)))
+                else:
+                    report.rejected_claims += 1
+            by_title = {h.title: h.id for h in graph.hypotheses}
+            report.conclusion = InvestigationConclusion(
+                summary=c.summary, evidence_ids=ids, findings=findings,
+                preferred_hypothesis_id=by_title.get(c.preferred_hypothesis_title),
+                alternative_hypothesis_ids=[by_title[t] for t in c.alternative_hypothesis_titles if t in by_title],
+                limitations=c.limitations, citations=citations(ids))
+            step(report.turns, "conclusion", "Overall investigation conclusion", detail=c.summary,
+                 evidence_ids=ids, citations=citations(ids))
+        else:
+            report.rejected_claims += 1
     graph.open_questions = out.open_questions[:20]
+    if report.conclusion is None:
+        graph.open_questions.append("No cited overall conclusion was produced; the investigation remains incomplete.")
     if report.rejected_claims:
         graph.open_questions.append(f"{report.rejected_claims} proposed claims lacked valid inspected evidence and were discarded.")
     graph.occurrence_categories = out.occurrence_categories

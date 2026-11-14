@@ -36,7 +36,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--from-case", required=True)
     parser.add_argument("--case-id", required=True)
-    parser.add_argument("--fusion", choices=("investigator", "linker"), default="investigator")
+    parser.add_argument("--fusion", choices=("team", "investigator", "linker"), default="investigator")
     parser.add_argument("--max-turns", type=int, choices=range(2, 21), default=8)
     args = parser.parse_args()
     try:

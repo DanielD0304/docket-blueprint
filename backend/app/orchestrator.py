@@ -22,14 +22,16 @@ from .fusion.clock_anchor import anchor_mmss
 from .fusion.dedup import dedup
 from .fusion.linker import link
 from .fusion.investigator import investigate
+from .fusion.team import investigate_team
 from .fusion.time_align import align
 from .fusion.verifier import verify
 from .ingest.chunker import plan_chunks
 from .ingest.inventory import inventory
 from .ingest.triage import apply_role, heuristic_role
-from .schemas import Anomaly, CaseGraph, Entity, Event, Fact, Series, SourceFile, TrackPoint
+from .schemas import Anomaly, CaseGraph, Entity, Event, Fact, Series, SourceFile, TrackPoint, SensorAnalysis
 from .store import CaseStore, bus
 from .tools.fdr import analyze_fdr
+from .tools.discovery import VERSION as DISCOVERY_VERSION
 from .tools.radar import analyze_radar
 from .tools.track import analyze_track
 
@@ -60,8 +62,8 @@ class CaseRunner:
         self.track_rank = 99
         self.track_file: str | None = None
         self.mmss_files: set[str] = set()
-        if fusion not in ("investigator", "linker"):
-            raise ValueError("fusion must be investigator or linker")
+        if fusion not in ("team", "investigator", "linker"):
+            raise ValueError("fusion must be team, investigator or linker")
         self.fusion = fusion
         self.max_turns = max_turns
         self.base_mock = self.llm.mock
@@ -152,6 +154,8 @@ class CaseRunner:
         t0 = time.time()
         try:
             payload = self.store.load_atoms(cache_id)
+            if job.kind == "fdr" and payload is not None and payload.get("discovery_version") != DISCOVERY_VERSION:
+                payload = None  # Recompute deterministic tools only; no paid extraction.
             cached = payload is not None
             if payload is None:
                 if job.kind == "pdf":
@@ -175,7 +179,7 @@ class CaseRunner:
                       ms=int((time.time() - t0) * 1000), n_events=len(payload["events"]),
                       n_anomalies=len(payload["anomalies"]), summary=payload.get("summary"))
             self.emit("atoms", file_id=f.file_id, events=payload["events"], anomalies=payload["anomalies"],
-                      track=payload.get("track", []), series=payload.get("series", []))
+                      track=payload.get("track", []), series=payload.get("series", []), sensors=payload.get("sensors", []))
             if job.kind in ("fdr", "track") and self.mmss_files:
                 # Resolve clocks for the live view without mutating the base extraction snapshot.
                 preview = self.graph.model_copy(update={
@@ -197,6 +201,7 @@ class CaseRunner:
             self.save_throttled()
 
     def absorb(self, f: SourceFile, payload: dict) -> None:
+        self.graph.sensors += [SensorAnalysis(**s) for s in payload.get("sensors", [])]
         self.graph.events += [Event(**e) for e in payload["events"]]
         self.graph.anomalies += [Anomaly(**a) for a in payload["anomalies"]]
         self.graph.entities += [Entity(**e) for e in payload.get("entities", [])]
@@ -293,7 +298,8 @@ class CaseRunner:
         self.emit("files", files=[f.model_dump() for f in self.graph.files])
         self.emit("atoms", events=[e.model_dump() for e in self.graph.events],
                   anomalies=[a.model_dump() for a in self.graph.anomalies],
-                  track=[p.model_dump() for p in self.graph.track], series=[s.model_dump() for s in self.graph.series])
+                  track=[p.model_dump() for p in self.graph.track], series=[s.model_dump() for s in self.graph.series],
+                  sensors=[s.model_dump() for s in self.graph.sensors])
 
     async def fuse(self) -> None:
         g = self.graph
@@ -311,12 +317,12 @@ class CaseRunner:
         self.stage("dedup")
         r = dedup(g)
         self.emit("fusion", step="dedup", result=r)
-        self.stage("investigate" if self.fusion == "investigator" else "link")
-        if self.fusion == "investigator":
+        self.stage("investigate" if self.fusion in ("team", "investigator") else "link")
+        if self.fusion in ("team", "investigator"):
             def progress(type_, **data):
                 self.emit(type_, **data)
                 self.store.save_graph(g)
-            r = await investigate(g, self.store.raw_dir, max_turns=self.max_turns, emit=progress)
+            r = await (investigate_team if self.fusion == "team" else investigate)(g, self.store.raw_dir, max_turns=self.max_turns, emit=progress)
         else:
             r = await link(g)
         self.emit("fusion", step=self.fusion, result=r)

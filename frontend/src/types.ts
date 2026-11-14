@@ -38,10 +38,23 @@ export interface Series { name: string; unit: string; source_file: string; point
 export interface InvestigationStep {
   id: string; turn: number; phase: "started" | "question" | "tool_call" | "tool_result" | "conclusion" | "error" | "finished";
   title: string; detail: string; tool: string | null; evidence_ids: string[]; citations: Citation[];
+  agent_id?: string; agent_name?: string; parent_step_id?: string | null;
 }
+export interface InvestigationFinding { id: string; title: string; explanation: string; evidence_ids: string[]; citations: Citation[]; stance: "supports" | "challenges" | "context" }
+export interface InvestigationConclusion {
+  summary: string; evidence_ids: string[]; findings: InvestigationFinding[]; preferred_hypothesis_id: string | null;
+  alternative_hypothesis_ids: string[]; limitations: string[]; citations: Citation[]; status: "supported" | "incomplete";
+}
+export interface InvestigationAgent {
+  id: string; name: string; role: string; status: "queued" | "running" | "done" | "budget_exhausted" | "error";
+  turns: number; tool_calls: number; max_turns: number; summary: string; evidence_ids: string[];
+  citations: Citation[]; findings: InvestigationFinding[];
+}
+export interface InvestigationCoverage { eligible_sources: number; total_evidence: number; inspected_evidence: number; inspected_sources: number; pages_read: number; recorder_checks: number }
 export interface InvestigationReport {
   status: "running" | "done" | "budget_exhausted" | "error"; model: string; max_turns: number;
   turns: number; tool_calls: number; rejected_claims: number; steps: InvestigationStep[];
+  mode?: "single" | "team"; agents?: InvestigationAgent[]; conclusion?: InvestigationConclusion | null; coverage?: InvestigationCoverage | null;
 }
 export interface CaseConfig { title: string; ntsb_id: string | null; date: string | null; aircraft: string | null; local_utc_offset_h: number; blind_mode: boolean }
 
@@ -52,9 +65,27 @@ export interface CaseGraph {
   facts: { id: string; subject: string; predicate: string; value: string; citations: Citation[] }[];
   conflicts: Conflict[]; causal_edges: CausalEdge[]; hypotheses: Hypothesis[]; open_questions: string[];
   occurrence_categories: string[]; track: TrackPoint[]; series: Series[]; stats: Record<string, any>;
+  sensors?: SensorAnalysis[];
   investigation?: InvestigationReport | null;
 }
 
 export type Selection = { kind: "event"; item: Event } | { kind: "anomaly"; item: Anomaly } | null;
 
 export interface StreamMsg { seq?: number; type: string; ts?: number; [k: string]: any }
+
+export interface SensorState {
+  id: string; label: string; start_s: number; end_s: number; first_row: number; last_row: number;
+  samples: number; minimum: number | null; maximum: number | null; median: number | null;
+  citations: Citation[]; certainty: string; verified: boolean;
+}
+export interface SensorFinding {
+  id: string; kind: "unusual_change" | "level_outlier" | "sampling_gap"; description: string;
+  start_s: number; end_s: number; score: number | null; citations: Citation[]; certainty: string; verified: boolean;
+}
+export interface SensorAnalysis {
+  sensor_id: string; source_file: string; column: string; unit: string;
+  kind: "continuous" | "discrete" | "unsupported";
+  status: "analyzed" | "insufficient_samples" | "unresolved_clock" | "no_samples" | "unsupported";
+  samples: number; cadence_s: number | null; method: string; limitations: string[];
+  states: SensorState[]; findings: SensorFinding[]; points: [number, number][]; plot_gaps: [number, number][]; citations: Citation[];
+}

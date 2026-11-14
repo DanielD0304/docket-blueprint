@@ -109,7 +109,7 @@ def list_cases():
 
 
 class FusionRunRequest(BaseModel):
-    fusion: Literal["investigator", "linker"] = "investigator"
+    fusion: Literal["team", "investigator", "linker"] = "investigator"
     max_turns: int = Field(8, ge=2, le=20)
 
 
