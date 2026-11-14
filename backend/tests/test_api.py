@@ -1,12 +1,12 @@
 """HTTP smoke tests against the FastAPI app (no LLM, isolated DATA_DIR via conftest)."""
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 from app import main
+from app.config import DOCKETS_DIR
 from app.schemas import CaseConfig
 from app.store import CaseStore
 
@@ -44,14 +44,28 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(body["config"]["title"], "API test")
 
     def test_local_case_rejects_missing_folder(self):
-        r = self.client.post("/api/cases/local", json={"path": str(Path(tempfile.gettempdir()) / "no-such-docket-xyz")})
+        r = self.client.post("/api/cases/local", json={"path": str(DOCKETS_DIR / "no-such-docket-xyz")})
         self.assertEqual(r.status_code, 400)
 
-    def test_local_case_starts_pipeline(self):
+    def test_local_case_rejects_folders_outside_data_dir(self):
         with tempfile.TemporaryDirectory() as td, patch("app.main._start") as start:
-            r = self.client.post("/api/cases/local", json={"path": td, "config": {"title": "Local"}})
+            r = self.client.post("/api/cases/local", json={"path": td})
+            r_up = self.client.post("/api/cases/local", json={"path": str(DOCKETS_DIR / ".." / ".." / "..")})
+        self.assertEqual((r.status_code, r_up.status_code), (403, 403))
+        start.assert_not_called()
+
+    def test_local_case_short_name_starts_pipeline(self):
+        (DOCKETS_DIR / "TEST00").mkdir(parents=True, exist_ok=True)
+        with patch("app.main._start") as start:
+            r = self.client.post("/api/cases/local", json={"path": "TEST00", "config": {"title": "Local"}})
         self.assertEqual(r.status_code, 200)
         start.assert_called_once_with(r.json()["case_id"])
+
+    def test_cors_only_allows_the_dev_ui(self):
+        ok = self.client.get("/api/health", headers={"Origin": "http://localhost:5173"})
+        evil = self.client.get("/api/health", headers={"Origin": "https://evil.example"})
+        self.assertEqual(ok.headers.get("access-control-allow-origin"), "http://localhost:5173")
+        self.assertNotIn("access-control-allow-origin", evil.headers)
 
     def test_fusion_run_validates_turn_budget(self):
         r = self.client.post("/api/cases/x/fusion-runs", json={"fusion": "team", "max_turns": 99})

@@ -25,6 +25,11 @@ DATA_DIR = (BACKEND_DIR / os.getenv("DATA_DIR", str(Path.home() / "DocketBluepri
 DOCKETS_DIR = DATA_DIR / "dockets"
 CASES_DIR = DATA_DIR / "cases"  # created on first write (CaseStore.create), never at import time
 
+# This is a local workstation tool without auth. Keep it that way: browsers may only call it from the
+# dev UI, and POST /api/cases/local may only read folders below these roots (os.pathsep separated).
+CORS_ORIGINS = [o.strip() for o in os.getenv("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()]
+LOCAL_CASE_ROOTS = [DATA_DIR] + [Path(p).expanduser().resolve() for p in os.getenv("LOCAL_CASE_ROOTS", "").split(os.pathsep) if p.strip()]
+
 # Citation verification threshold (rapidfuzz partial_ratio, 0-100).
 VERIFY_THRESHOLD = 85
 

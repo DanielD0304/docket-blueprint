@@ -75,7 +75,7 @@ cd backend
 
 Or use the UI: **Analyse local folder** (the parameters are prefilled), or `POST /api/cases/local`. A first full run with Gemini takes about 15 minutes: around 130 PDF chunks at roughly 50 s each, 32 agents in parallel (`MAX_CONCURRENCY`), plus 7 media files (the ATC audio alone takes about 15 minutes). Results are cached per job in `<DATA_DIR>/cases/<id>/atoms/`, so **Rerun pipeline** reuses valid extraction caches and refreshes outdated recorder tools. Gemini results are also shared across runs in `<DATA_DIR>/atom_cache/`, so a **new** run of an already analysed docket finishes extraction in under a minute.
 
-**Data location:** dockets and case outputs live in `DATA_DIR`, which defaults to `~/DocketBlueprintData`. That keeps them outside the repo and outside synced folders like OneDrive. Set it in `backend/.env`. Short names like `DCA19MA086` resolve to `<DATA_DIR>/dockets/DCA19MA086` in the CLI and the UI.
+**Data location:** dockets and case outputs live in `DATA_DIR`, which defaults to `~/DocketBlueprintData`. That keeps them outside the repo and outside synced folders like OneDrive. Set it in `backend/.env`. Short names like `DCA19MA086` resolve to `<DATA_DIR>/dockets/DCA19MA086` in the CLI and the UI. **Analyse local folder** only reads below `DATA_DIR` unless you add more roots with `LOCAL_CASE_ROOTS`.
 
 ### Re-run the investigator without re-extracting
 
@@ -151,6 +151,13 @@ cd ../frontend && npm run check && npm run build
 Tests use pytest: `tests/conftest.py` gives each run an isolated temporary `DATA_DIR`
 and forces the mock LLM, so the suite never touches real cases or a paid API.
 A per-test timeout (pytest-timeout, 120 s) fails a hung async test instead of blocking.
+In sandboxes that block loopback sockets (Windows asyncio needs them), async tests are skipped
+with that reason instead of hanging; `DOCKET_TEST_SIMULATE_NO_LOOPBACK=1` reproduces this.
+
+**Security model:** a local, single-user workstation tool with no authentication. The API serves
+CORS only to the dev UI origins (`CORS_ORIGINS`), reads local dockets only below `DATA_DIR` /
+`LOCAL_CASE_ROOTS`, rejects zip-slip paths, and tracks running jobs in-process (one worker).
+Do not expose it on a shared network without adding auth and a job queue.
 
 ---
 
