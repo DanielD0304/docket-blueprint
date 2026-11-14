@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import random
 from pathlib import Path
 
@@ -9,9 +10,11 @@ from ..config import MOCK_DELAY_S, MODEL_FAST, MODEL_PRO
 from ..ingest.chunker import page_texts, subset_pdf
 from ..ingest.triage import first_pages_text
 from ..schemas import CaseConfig, Extraction, SourceFile, Triage
-from .llm import get_llm
+from .llm import OutputTruncated, get_llm
 from .mock import mock_extract
 from .prompts import EXTRACT_BASE, IMAGE_PROMPT, MEDIA_BASE, MEDIA_PROMPTS, ROLE_PROMPTS, TRIAGE_PROMPT
+
+log = logging.getLogger(__name__)
 
 # Roles that need the stronger reasoning model.
 PRO_ROLES = {"cvr_transcript", "ops_factual", "hp_factual", "fdr_report", "performance", "atc", "systems"}
@@ -50,7 +53,38 @@ async def extract_pdf_chunk(path: Path, sf: SourceFile, start: int, end: int, cf
         f"{start + 1}-{end + 1} of {sf.pages}. Citation page numbers refer to the attachment (1 = first attached page).",
     ]
     model = MODEL_PRO if sf.role in PRO_ROLES else MODEL_FAST
-    return await llm.structured(model=model, system=system, parts=parts, schema=Extraction)
+    try:
+        return await llm.structured(model=model, system=system, parts=parts, schema=Extraction, timeout_s=600)
+    except OutputTruncated:
+        # Dense pages (ACARS logs, CVR transcripts) can produce more atoms than one response holds.
+        # Split the range and extract the halves separately instead of re-asking the same thing.
+        if end - start < 1:
+            raise
+        mid = (start + end) // 2
+        log.warning("%s pages %d-%d: output truncated, splitting into %d-%d and %d-%d",
+                    sf.name, start + 1, end + 1, start + 1, mid + 1, mid + 2, end + 1)
+        left = await extract_pdf_chunk(path, sf, start, mid, cfg)
+        right = await extract_pdf_chunk(path, sf, mid + 1, end, cfg)
+        return merge_extractions(left, right, page_shift=mid + 1 - start)
+
+
+def merge_extractions(left: Extraction, right: Extraction, page_shift: int) -> Extraction:
+    """Combine two half-chunk extractions. Citation pages are 1-based within each attachment, so the
+    right half's pages are shifted to stay relative to the original chunk start (what to_atoms expects)."""
+    def shift(items):
+        for it in items:
+            for c in it.citations:
+                if c.page:
+                    c.page += page_shift
+        return items
+
+    return Extraction(
+        summary=" ".join(s for s in (left.summary, right.summary) if s),
+        events=left.events + shift(right.events),
+        anomalies=left.anomalies + shift(right.anomalies),
+        entities=left.entities + right.entities,
+        facts=left.facts + shift(right.facts),
+    )
 
 
 MEDIA_MIME = {".mp4": "video/mp4", ".mov": "video/quicktime", ".wmv": "video/x-ms-wmv", ".avi": "video/x-msvideo",
@@ -81,7 +115,7 @@ async def extract_media(path: Path, sf: SourceFile, cfg: CaseConfig) -> Extracti
         return await llm.structured(
             model=model, system=MEDIA_BASE + "\n" + MEDIA_PROMPTS[key] + case_brief(cfg),
             parts=[types.Part.from_uri(file_uri=up.uri, mime_type=up.mime_type or mime), f"File: '{sf.name}' (docket item {sf.docket_item})."],
-            schema=Extraction, extra=extra)
+            schema=Extraction, extra=extra, timeout_s=1800)  # long recordings: ~15 min observed
 
 
 async def extract_image(path: Path, sf: SourceFile, cfg: CaseConfig) -> Extraction:

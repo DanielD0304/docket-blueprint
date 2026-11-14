@@ -10,13 +10,37 @@ cases/<case_id>/
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 from collections import defaultdict
+from functools import lru_cache
 from pathlib import Path
 
-from .config import CASES_DIR
+from .config import CASES_DIR, DATA_DIR
 from .schemas import CaseConfig, CaseGraph
+
+
+ATOM_CACHE_DIR = DATA_DIR / "atom_cache"
+
+
+@lru_cache(maxsize=1)
+def extraction_version() -> str:
+    """Changes whenever something that shapes a Gemini extraction changes: model IDs, prompts or the
+    LLM→atom conversion. Old cache entries are then simply not found. (Payloads are validated against
+    the current schema when loaded, so unrelated schema edits do not invalidate the cache.)"""
+    from .agents import atoms, prompts
+    from .config import MODEL_FAST, MODEL_PRO
+
+    h = hashlib.sha256()
+    h.update(f"{MODEL_FAST}|{MODEL_PRO}".encode())
+    for mod in (prompts, atoms):
+        h.update(Path(mod.__file__).read_bytes())
+    return h.hexdigest()[:12]
+
+
+def shared_cache_path(shared_key: str) -> Path:
+    return ATOM_CACHE_DIR / extraction_version() / f"{shared_key}.json"
 
 
 class CaseStore:
@@ -56,12 +80,34 @@ class CaseStore:
             return None
         return CaseGraph.model_validate_json(self.graph_path.read_text(encoding="utf-8"))
 
-    def save_atoms(self, job_id: str, payload: dict) -> None:
-        (self.atoms_dir / f"{job_id}.json").write_text(json.dumps(payload, indent=1, default=str), encoding="utf-8")
+    def save_atoms(self, job_id: str, payload: dict, shared_key: str | None = None) -> None:
+        text = json.dumps(payload, indent=1, default=str)
+        (self.atoms_dir / f"{job_id}.json").write_text(text, encoding="utf-8")
+        if shared_key:
+            p = shared_cache_path(shared_key)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(text, encoding="utf-8")
+            tmp.replace(p)
 
-    def load_atoms(self, job_id: str) -> dict | None:
+    def load_atoms(self, job_id: str, shared_key: str | None = None) -> dict | None:
+        """Case-local result first; otherwise the shared cache (same file content, same chunk, same
+        models/prompts), so a NEW run of an already analysed docket does not pay for Gemini again."""
         p = self.atoms_dir / f"{job_id}.json"
-        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+        if p.exists():
+            text = p.read_text(encoding="utf-8")
+            if shared_key and not shared_cache_path(shared_key).exists():  # backfill from older runs
+                s = shared_cache_path(shared_key)
+                s.parent.mkdir(parents=True, exist_ok=True)
+                s.write_text(text, encoding="utf-8")
+            return json.loads(text)
+        if shared_key:
+            s = shared_cache_path(shared_key)
+            if s.exists():
+                text = s.read_text(encoding="utf-8")
+                p.write_text(text, encoding="utf-8")  # keep the case self-contained
+                return json.loads(text)
+        return None
 
     @staticmethod
     def list_cases() -> list[dict]:

@@ -146,12 +146,16 @@ class CaseRunner:
         f = self.files[job.file_id]
         path = self.store.raw_dir / f.rel_path
         cache_id = job.job_id + ("-mock" if self.llm.mock and job.kind in ("pdf", "image", "media") else "")
+        # Gemini jobs are shared across runs: job_id = file content hash + chunk range; the time offset
+        # shapes to_atoms output, so it is part of the key. Cheap tool jobs (fdr/track/radar) stay per case.
+        shared_key = (f"{cache_id}-o{self.cfg.local_utc_offset_h:g}"
+                      if job.kind in ("pdf", "image", "media") and not self.llm.mock else None)
         f.status = "processing"
         self.emit("job", job_id=job.job_id, file_id=f.file_id, status="running", kind=job.kind,
                   pages=[job.start + 1, job.end + 1] if job.kind == "pdf" else None)
         t0 = time.time()
         try:
-            payload = self.store.load_atoms(cache_id)
+            payload = self.store.load_atoms(cache_id, shared_key)
             cached = payload is not None
             if payload is None:
                 if job.kind == "pdf":
@@ -169,7 +173,7 @@ class CaseRunner:
                     payload = await asyncio.to_thread(analyze_fdr, path, f, self.cfg.local_utc_offset_h)
                 else:
                     payload = await asyncio.to_thread(analyze_track, path, f, self.cfg.local_utc_offset_h)
-                self.store.save_atoms(cache_id, payload)
+                self.store.save_atoms(cache_id, payload, shared_key)
             self.absorb(f, payload)
             self.emit("job", job_id=job.job_id, file_id=f.file_id, status="done", cached=cached,
                       ms=int((time.time() - t0) * 1000), n_events=len(payload["events"]),

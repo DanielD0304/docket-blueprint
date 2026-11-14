@@ -16,6 +16,12 @@ T = TypeVar("T", bound=BaseModel)
 RETRYABLE = {408, 429, 500, 502, 503, 504}
 
 
+class OutputTruncated(RuntimeError):
+    """The model hit its output-token limit, so the JSON is cut off. Retrying the same request
+    produces the same truncation (ACARS pages with hundreds of messages did this for 4×~5 min);
+    callers should shrink the input instead (see extractor.extract_pdf_chunk)."""
+
+
 class LLM:
     def __init__(self) -> None:
         self.mock = MOCK_LLM
@@ -42,7 +48,13 @@ class LLM:
         return f
 
     async def structured(self, *, model: str, system: str, parts: list, schema: type[T],
-                         temperature: float = 0.1, retries: int = 4, extra: dict | None = None) -> T:
+                         temperature: float = 0.1, retries: int = 4, extra: dict | None = None,
+                         timeout_s: float = 600) -> T:
+        """One structured Gemini call with retries.
+
+        * timeout_s bounds every attempt: without it a stalled HTTP response blocks the job forever.
+        * finish_reason MAX_TOKENS raises OutputTruncated immediately instead of re-asking the same thing.
+        """
         from google.genai import types
 
         assert self.client is not None, "structured() called in mock mode"
@@ -51,7 +63,7 @@ class LLM:
         async with self.sem:
             for attempt in range(retries):
                 try:
-                    resp = await self.client.aio.models.generate_content(
+                    resp = await asyncio.wait_for(self.client.aio.models.generate_content(
                         model=model,
                         contents=contents,
                         config=types.GenerateContentConfig(
@@ -61,7 +73,7 @@ class LLM:
                             temperature=temperature,
                             **(extra or {}),
                         ),
-                    )
+                    ), timeout=timeout_s)
                     self.usage["calls"] += 1
                     um = getattr(resp, "usage_metadata", None)
                     if um:
@@ -69,10 +81,20 @@ class LLM:
                         self.usage["output_tokens"] += um.candidates_token_count or 0
                     if isinstance(resp.parsed, schema):
                         return resp.parsed
+                    finish = str(getattr((resp.candidates or [None])[0], "finish_reason", "") or "")
+                    if "MAX_TOKENS" in finish:
+                        self.usage["errors"] += 1
+                        raise OutputTruncated(f"{model}: output hit the token limit "
+                                              f"({um.candidates_token_count if um else '?'} tokens)")
                     return schema.model_validate_json(resp.text or "{}")
+                except OutputTruncated:
+                    raise
                 except ValidationError as e:
                     last_err = e
                     contents = list(parts) + [f"Your previous answer failed schema validation:\n{e}\nReturn valid JSON only."]
+                except asyncio.TimeoutError:
+                    last_err = TimeoutError(f"{model}: no response within {timeout_s:.0f} s")
+                    log.warning("LLM call timed out after %.0f s (attempt %d/%d)", timeout_s, attempt + 1, retries)
                 except Exception as e:  # network / API errors
                     last_err = e
                     code = getattr(e, "code", None) or getattr(e, "status_code", None)
