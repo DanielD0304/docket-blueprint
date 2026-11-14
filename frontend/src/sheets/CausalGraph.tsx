@@ -15,7 +15,6 @@ export const HFACS: Record<HfacsLayer, { label: string; color: string }> = {
   aircraft_environment: { label: "Aircraft / env.", color: "#6ee7a8" },
   outcome: { label: "Outcome", color: "#ff5d5d" },
 };
-const SEV = { critical: "var(--crit)", significant: "var(--warn)", minor: "var(--line)", info: "var(--ink-dim)" };
 
 interface Props { anomalies: Anomaly[]; edges: CausalEdge[]; hypotheses: Hypothesis[]; selected: Selection; onSelect: (s: Selection) => void }
 
@@ -118,7 +117,7 @@ export function CausalGraph({ anomalies, edges, hypotheses, selected, onSelect }
   const colLabel = (r: number) => (r === 0 ? "Root causes" : r === L.nCols - 1 ? "Outcome" : `Causal step ${r}`);
 
   return (
-    <div className="sheet causal" ref={ref}>
+    <div className="sheet causal-graph" ref={ref}>
       <div className="causal-bar">
         <span className="label">Hypotheses</span>
         {hypotheses.map((h) => (
@@ -171,8 +170,9 @@ export function CausalGraph({ anomalies, edges, hypotheses, selected, onSelect }
             return (
               <g key={a.id} transform={`translate(${x},${y})`} opacity={on ? 1 : 0.22} className="cg-node"
                 onMouseEnter={() => setHover(a.id)} onMouseLeave={() => setHover(null)} onClick={() => onSelect({ kind: "anomaly", item: a })}>
-                <rect width={W} height={H} fill={selId === a.id ? "rgba(94,225,255,0.16)" : "var(--paper-2)"} stroke={SEV[a.severity]} strokeWidth={selId === a.id || hover === a.id ? 2 : 1} />
-                <rect width={4} height={H} fill={layer.color} />
+                <rect width={W} height={H} fill="var(--paper-2)" />
+                <rect width={W} height={H} fill={layer.color} fillOpacity={selId === a.id || hover === a.id ? 0.24 : 0.1}
+                  stroke={layer.color} strokeWidth={selId === a.id || hover === a.id ? 2 : 1} />
                 <foreignObject x={10} y={4} width={W - 14} height={H - 8}>
                   <div className="cg-text">
                     <b>{a.title}</b>
