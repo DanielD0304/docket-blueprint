@@ -226,7 +226,7 @@ class CaseRunner:
                 job = q.get_nowait()
                 await self.run_job(job)
 
-        await asyncio.gather(*(worker() for _ in range(MAX_CONCURRENCY + 2)))
+        await asyncio.gather(*(worker() for _ in range(MAX_CONCURRENCY)))  # one worker = one extractor agent
         self.save_extractions()
 
     def save_extractions(self) -> None:

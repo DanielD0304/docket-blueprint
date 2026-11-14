@@ -51,7 +51,7 @@ cd backend
 .venv/Scripts/python -m app.cli DCA19MA086 --title "Atlas Air 3591" --ntsb DCA19MA086 --date 2019-02-23 --aircraft "Boeing 767-375BCF" --offset -6
 ```
 
-Or use the UI: **Analyse local folder** (the parameters are prefilled), or `POST /api/cases/local`. A full run with Gemini takes about 15–25 minutes: around 130 PDF chunks at roughly 50 s each, 14 in parallel, plus 7 media files. Results are cached per job in `<DATA_DIR>/cases/<id>/atoms/`, so **Re-run** only redoes fusion.
+Or use the UI: **Analyse local folder** (the parameters are prefilled), or `POST /api/cases/local`. A full run with Gemini takes about 15–25 minutes: around 130 PDF chunks at roughly 50 s each, 32 agents in parallel (`MAX_CONCURRENCY`), plus 7 media files. Results are cached per job in `<DATA_DIR>/cases/<id>/atoms/`, so **Re-run** only redoes fusion.
 
 **Data location:** dockets and case outputs live in `DATA_DIR`, which defaults to `~/DocketBlueprintData`. That keeps them outside the repo and outside synced folders like OneDrive. Set it in `backend/.env`. Short names like `DCA19MA086` resolve to `<DATA_DIR>/dockets/DCA19MA086` in the CLI and the UI.
 

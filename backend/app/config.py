@@ -10,7 +10,8 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or "
 MODEL_FAST = os.getenv("GEMINI_MODEL_FAST", "gemini-4-hydrogen")
 MODEL_PRO = os.getenv("GEMINI_MODEL_PRO", "gemini-4-argon")
 
-MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY", "12"))
+# Number of parallel extractor agents (job workers) and the cap on simultaneous Gemini calls.
+MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY", "32"))
 CHUNK_PAGES = int(os.getenv("CHUNK_PAGES", "20"))
 MAX_PAGES_PER_DOC = int(os.getenv("MAX_PAGES_PER_DOC", "200"))
 

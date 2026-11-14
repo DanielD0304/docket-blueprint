@@ -155,7 +155,7 @@ Prompt rules for all extractors:
 - **Flash‑class** (cheap, fast): triage, photos, simple tables, verifier passes.
 - **Pro‑class** (long context, reasoning): CVR, Ops, HP, all Stage‑2 agents.
 - Use **context caching** for the shared "case brief" (aircraft type, date, crew names, location, SOP baseline) that every extractor gets as a prefix — fewer tokens, consistent naming.
-- Concurrency: `asyncio.Semaphore(~16)` + exponential backoff on 429. Job retries ×2; on schema validation failure, re-ask with the validation error.
+- Concurrency: `MAX_CONCURRENCY` (default 32) job workers = extractor agents, same cap on simultaneous Gemini calls via `asyncio.Semaphore` + exponential backoff on 429. Job retries ×2; on schema validation failure, re-ask with the validation error.
 
 ---
 
