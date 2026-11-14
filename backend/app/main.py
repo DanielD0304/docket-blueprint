@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
-from .config import MOCK_LLM, MODEL_FAST, MODEL_PRO
+from .config import DATA_DIR, DOCKETS_DIR, MOCK_LLM, MODEL_FAST, MODEL_PRO
 from .ingest.unzip import safe_extract
 from .orchestrator import CaseRunner
 from .schemas import CaseConfig
@@ -40,7 +40,7 @@ def _start(case_id: str) -> None:
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "mock": MOCK_LLM, "models": {"fast": MODEL_FAST, "pro": MODEL_PRO}}
+    return {"ok": True, "mock": MOCK_LLM, "models": {"fast": MODEL_FAST, "pro": MODEL_PRO}, "data_dir": str(DATA_DIR)}
 
 
 @app.post("/api/cases")
@@ -80,7 +80,10 @@ class LocalCase(BaseModel):
 @app.post("/api/cases/local")
 async def create_local_case(body: LocalCase):
     """Point at an already-downloaded docket folder (no copy). Handy for the 1 GB+ dockets."""
-    p = Path(body.path).expanduser().resolve()
+    p = Path(body.path).expanduser()
+    if not p.is_absolute():  # short names like "DCA19MA086" are looked up in DATA_DIR/dockets
+        p = DOCKETS_DIR / p if (DOCKETS_DIR / p).is_dir() else p
+    p = p.resolve()
     if not p.is_dir():
         raise HTTPException(400, f"not a directory: {p}")
     case_id = _new_case_id(body.config)

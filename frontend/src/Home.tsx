@@ -9,7 +9,7 @@ const ATLAS = {
 export function Home({ open, openSample }: { open: (id: string) => void; openSample: () => void }) {
   const [cfg, setCfg] = useState<Record<string, any>>(ATLAS);
   const [files, setFiles] = useState<File[]>([]);
-  const [path, setPath] = useState("../data/dockets/DCA19MA086");
+  const [path, setPath] = useState("DCA19MA086"); // short name → <DATA_DIR>/dockets/DCA19MA086 (or an absolute path)
   const [over, setOver] = useState(false);
   const [cases, setCases] = useState<any[]>([]);
   const [status, setStatus] = useState<string>("checking backend…");

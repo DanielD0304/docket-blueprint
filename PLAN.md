@@ -266,7 +266,7 @@ Keep everything file-based (JSON per job) → resumable, cacheable, easy to debu
 
 **Decision: Atlas Air 3591 — DCA19MA086** (B767‑375BCF, 2019‑02‑23, Trinity Bay TX; final report AAR‑20‑02; local = CST = UTC−6).
 The docket has 78 items: rich but manageable. Key items (checked on data.ntsb.gov): #1 Ops/HP group factual (86 pp) + attachments #2–32 (#2 is the 734‑page interview compilation → capped by `MAX_PAGES_PER_DOC`), #37/#38 FDR ancillary report + **CSV**, #48 **ADS‑B CSV** (→ 3D track), #52 maintenance records, #53 ATC factual, #57 ATC audio WAV, #60 ATIS MP3, #61 ATC transcript, #62 airplane performance study, #63 powerplants, #66/#67 FDR factual + **CSV**, #68 CVR group chairman's factual + transcript (54 pp), #69 CVR sound spectrum study, #70 systems, #33–34/#49–51 MP4 videos, #55 radar (PPB), #75–78 party submissions.
-Download the docket into `data/dockets/DCA19MA086/` (keep the item number at the start of each filename — triage uses it).
+Download the docket into `<DATA_DIR>/dockets/DCA19MA086/` (default DATA_DIR: `~/DocketBlueprintData`, outside OneDrive) (keep the item number at the start of each filename — triage uses it).
 
 Other candidates considered:
 - **Atlas Air 3591**, B767F, 2019 (DCA19MA086) — FDR/CVR, spatial disorientation, HP; strong.

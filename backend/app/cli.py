@@ -1,6 +1,6 @@
 """Run a case without the web server (precompute the demo).
 
-python -m app.cli ../data/dockets/DCA19MA086 --title "Atlas Air 3591" --ntsb DCA19MA086 --date 2019-02-23 \
+python -m app.cli DCA19MA086 --title "Atlas Air 3591" --ntsb DCA19MA086 --date 2019-02-23 \
     --aircraft "Boeing 767-375BCF" --offset -6
 """
 from __future__ import annotations
@@ -10,6 +10,7 @@ import asyncio
 import uuid
 from pathlib import Path
 
+from .config import DOCKETS_DIR
 from .orchestrator import CaseRunner
 from .schemas import CaseConfig
 from .store import CaseStore
@@ -30,8 +31,11 @@ def main() -> None:
                      local_utc_offset_h=a.offset, blind_mode=not a.no_blind)
     case_id = a.case_id or f"{a.ntsb or 'case'}-{uuid.uuid4().hex[:6]}"
     store = CaseStore(case_id)
+    folder = Path(a.folder)
+    if not folder.is_absolute() and (DOCKETS_DIR / folder).is_dir():  # short name -> DATA_DIR/dockets/<name>
+        folder = DOCKETS_DIR / folder
     if not store.meta_path.exists():
-        store.create(cfg, raw_dir=Path(a.folder).resolve())
+        store.create(cfg, raw_dir=folder.resolve())
     store.events_path.unlink(missing_ok=True)
     g = asyncio.run(CaseRunner(case_id).run())
     print(f"case {case_id}: {g.stats}")

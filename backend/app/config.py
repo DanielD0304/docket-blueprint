@@ -18,7 +18,10 @@ MOCK_LLM = os.getenv("MOCK_LLM", "0") == "1" or not GEMINI_API_KEY
 # Seconds of fake latency per mock job, so the live UI can be demoed without a key.
 MOCK_DELAY_S = float(os.getenv("MOCK_DELAY_S", "1.5"))
 
-DATA_DIR = (BACKEND_DIR / os.getenv("DATA_DIR", "../data")).resolve()
+# Dockets + case outputs (GBs). Default lives in the user's home, outside the repo and outside
+# synced folders like OneDrive. Override with DATA_DIR (absolute, or relative to backend/).
+DATA_DIR = (BACKEND_DIR / os.getenv("DATA_DIR", str(Path.home() / "DocketBlueprintData"))).resolve()
+DOCKETS_DIR = DATA_DIR / "dockets"
 CASES_DIR = DATA_DIR / "cases"
 CASES_DIR.mkdir(parents=True, exist_ok=True)
 
