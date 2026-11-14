@@ -1,8 +1,18 @@
 from pathlib import Path
 from unittest import IsolatedAsyncioTestCase
+
 from test_investigator import graph
+
 from app.fusion.team import investigate_team
-from app.schemas import InvestigatorDecision, InvestigatorToolCall, LLMResearchReport, LLMInvestigationFinding, LinkerOutput, LLMInvestigationConclusion
+from app.schemas import (
+    InvestigatorDecision,
+    InvestigatorToolCall,
+    LinkerOutput,
+    LLMInvestigationConclusion,
+    LLMInvestigationFinding,
+    LLMResearchReport,
+)
+
 
 class TeamTests(IsolatedAsyncioTestCase):
     async def test_cited_handoffs_and_explicit_conclusion(self):

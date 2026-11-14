@@ -14,9 +14,10 @@ import numpy as np
 import pandas as pd
 
 from ..schemas import Anomaly, AnomalyObservation, Citation, Event, Param, Series, SourceFile, TimeRef
-from .table import find_col, load_table, numeric, time_seconds
-from .discovery import VERSION as DISCOVERY_VERSION, discover_changes
+from .discovery import VERSION as DISCOVERY_VERSION
+from .discovery import discover_changes
 from .sensors import analyze_sensors
+from .table import find_col, load_table, numeric, time_seconds
 
 # Discretes worth showing, most important first (others are skipped to keep the timeline readable).
 DISCRETE_PRIORITY = [

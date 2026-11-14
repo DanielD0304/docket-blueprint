@@ -20,7 +20,6 @@ from pathlib import Path
 from .config import CASES_DIR, DATA_DIR
 from .schemas import CaseConfig, CaseGraph
 
-
 ATOM_CACHE_DIR = DATA_DIR / "atom_cache"
 
 
@@ -111,7 +110,9 @@ class CaseStore:
 
     @staticmethod
     def list_cases() -> list[dict]:
-        out = []
+        out: list[dict] = []
+        if not CASES_DIR.is_dir():
+            return out
         for d in sorted(CASES_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
             if (d / "meta.json").exists():
                 s = CaseStore(d.name)

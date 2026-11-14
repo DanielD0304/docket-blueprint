@@ -3,10 +3,13 @@ import wave
 from pathlib import Path
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, Mock, patch
+
 from test_investigator import graph
-from app.schemas import Extraction, LLMEvent, LLMTime, LLMCitation, CaseConfig
+
 from app.agents.extractor import extract_long_wav
-from app.main import create_local_case, LocalCase
+from app.main import LocalCase, create_local_case
+from app.schemas import CaseConfig, Extraction, LLMCitation, LLMEvent, LLMTime
+
 
 class DemoMediaTests(IsolatedAsyncioTestCase):
     async def test_chunk_citations_seek_to_original_and_cache_is_reused(self):
@@ -32,8 +35,9 @@ class DemoMediaTests(IsolatedAsyncioTestCase):
             start.assert_not_called()
 
     async def test_rerun_does_not_erase_an_active_cli_run(self):
-        from app.main import rerun
         from fastapi import HTTPException
+
+        from app.main import rerun
         store=Mock();store.meta_path.exists.return_value=True
         g=graph();g.status='running';store.load_graph.return_value=g
         with patch('app.main.CaseStore',return_value=store),patch('app.main._tasks',{}):

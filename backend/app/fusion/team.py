@@ -1,12 +1,22 @@
 """Independent research contexts, adversarial review, then cited lead synthesis."""
 from __future__ import annotations
+
 import asyncio
 import json
-from ..agents.llm import get_llm
+
 from ..agents.extractor import case_brief
+from ..agents.llm import get_llm
 from ..config import MODEL_PRO
-from ..schemas import (InvestigationReport, InvestigationAgent, InvestigationStep,
-    InvestigationFinding, InvestigationCoverage, InvestigatorDecision, InvestigatorToolCall, LLMInvestigationConclusion)
+from ..schemas import (
+    InvestigationAgent,
+    InvestigationCoverage,
+    InvestigationFinding,
+    InvestigationReport,
+    InvestigationStep,
+    InvestigatorDecision,
+    InvestigatorToolCall,
+    LLMInvestigationConclusion,
+)
 from ..tools.investigation import EvidenceTools
 from .investigator import PROMPT, apply_conclusion
 
@@ -103,7 +113,7 @@ async def investigate_team(graph, raw_dir, *, max_turns=8, emit=None, llm=None):
                         report.turns += 1
                         agent.turns += 1
                         apply_conclusion(graph, decision.conclusion, tools, report,
-                            lambda _t, phase, title, **kw: step(agent, turn, phase, title, **kw))
+                            lambda _t, phase, title, **kw: step(agent, turn, phase, title, **kw))  # noqa: B023 (called within this iteration)
                         agent.status = "done" if report.conclusion else "budget_exhausted"
                         break
                     if agent.id != "lead" and decision.research_report is not None:

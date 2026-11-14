@@ -6,8 +6,8 @@ Per-job outputs are cached in atoms/<job_id>.json, so re-runs only redo fusion (
 from __future__ import annotations
 
 import asyncio
-import itertools
 import hashlib
+import itertools
 import json
 import logging
 import time
@@ -20,18 +20,18 @@ from .agents.llm import get_llm
 from .config import CHUNK_PAGES, MAX_CONCURRENCY, MAX_PAGES_PER_DOC
 from .fusion.clock_anchor import anchor_mmss
 from .fusion.dedup import dedup
-from .fusion.linker import link
 from .fusion.investigator import investigate
+from .fusion.linker import link
 from .fusion.team import investigate_team
 from .fusion.time_align import align
 from .fusion.verifier import verify
 from .ingest.chunker import plan_chunks
 from .ingest.inventory import inventory
 from .ingest.triage import apply_role, heuristic_role
-from .schemas import Anomaly, CaseGraph, Entity, Event, Fact, Series, SourceFile, TrackPoint, SensorAnalysis
+from .schemas import Anomaly, CaseGraph, Entity, Event, Fact, SensorAnalysis, Series, SourceFile, TrackPoint
 from .store import CaseStore, bus
-from .tools.fdr import analyze_fdr
 from .tools.discovery import VERSION as DISCOVERY_VERSION
+from .tools.fdr import analyze_fdr
 from .tools.radar import analyze_radar
 from .tools.track import analyze_track
 

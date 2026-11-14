@@ -10,8 +10,18 @@ from unittest.mock import patch
 from app.fusion.investigator import investigate
 from app.orchestrator import CaseRunner
 from app.refuse import prepare_fusion_run
-from app.schemas import (Anomaly, CaseConfig, CaseGraph, Citation, InvestigatorDecision,
-                         InvestigatorToolCall, LinkerOutput, Series, SourceFile, TimeRef)
+from app.schemas import (
+    Anomaly,
+    CaseConfig,
+    CaseGraph,
+    Citation,
+    InvestigatorDecision,
+    InvestigatorToolCall,
+    LinkerOutput,
+    Series,
+    SourceFile,
+    TimeRef,
+)
 from app.store import CaseStore
 from app.tools.investigation import EvidenceTools
 

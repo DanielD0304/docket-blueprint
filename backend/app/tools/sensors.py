@@ -6,14 +6,14 @@ between actual observations are reported separately. No interpolation is used.
 """
 from __future__ import annotations
 
-from hashlib import sha256
 import re
+from hashlib import sha256
 
 import numpy as np
 import pandas as pd
 
 from ..schemas import Citation, SensorAnalysis, SensorFinding, SensorState
-from .discovery import VERSION, UNITS, discover_changes
+from .discovery import UNITS, VERSION, discover_changes
 
 MAX_STATES = 2000
 MAX_PER_DETECTOR = 12
@@ -41,7 +41,7 @@ def analyze_sensors(df: pd.DataFrame, times: np.ndarray, source_file: str, *,
             kind = "unsupported"
 
         def citation(a: int, b: int, detail: str) -> Citation:
-            return Citation(file_id=source_file, quote=f"Parsed data rows {a + 1}-{b + 1}, column '{column}': {detail}",
+            return Citation(file_id=source_file, quote=f"Parsed data rows {a + 1}-{b + 1}, column '{column}': {detail}",  # noqa: B023 (called within this iteration)
                             verified=True, score=100)
 
         analysis = SensorAnalysis(sensor_id=sid, source_file=source_file, column=column, unit=unit,

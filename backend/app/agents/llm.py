@@ -97,7 +97,7 @@ class LLM:
                 except ValidationError as e:
                     last_err = e
                     contents = list(parts) + [f"Your previous answer failed schema validation:\n{e}\nReturn valid JSON only."]
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     last_err = TimeoutError(f"Gemini request exceeded {limit:g} seconds ({model})")
                     log.warning("LLM call timed out after %.0f s (attempt %d/%d)", limit, attempt + 1, retries)
                 except Exception as e:  # network / API errors

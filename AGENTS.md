@@ -14,8 +14,9 @@ Read [README.md](README.md) first (run instructions, architecture), then [PLAN.m
 ## Dev loop
 
 ```bash
-cd frontend && npx tsc -b                      # type-check (no test suite yet)
-cd backend && .venv/Scripts/python -c "import app.main"
+make check                                     # ruff + tsc + pytest + node --test (what CI runs)
+cd backend && .venv/Scripts/python -m pytest   # use pytest, not unittest: conftest.py isolates DATA_DIR
+cd frontend && npm run check
 MOCK_LLM=1 .venv/Scripts/python -m app.cli <folder> --case-id test-x    # free end-to-end run
 ```
 
@@ -47,4 +48,4 @@ MOCK_LLM=1 .venv/Scripts/python -m app.cli <folder> --case-id test-x    # free e
 | FDR learned anomaly detection (TimesFM, matrix profile, change points) | `backend/app/tools/fdr.py`, PLAN.md §11 |
 | Conflict detector (LLM) / better entity resolution | `backend/app/fusion/dedup.py` |
 | PDF.js viewer with quote highlight | `frontend/src/views/Sources.tsx` (`Preview`) |
-| Tests | none yet: start with `tools/table.py` + `timeparse.py` on small fixture CSVs |
+| Tests | pytest + `node --test`, run in CI. Add a fixture test with every parser change; `test_schema_mirror.py` fails when `types.ts` drifts |

@@ -3,14 +3,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from ..agents.extractor import case_brief
 from ..agents.llm import get_llm
 from ..config import MODEL_PRO
-from ..schemas import (CaseGraph, CausalEdge, Hypothesis, InvestigationReport, InvestigationStep,
-                       InvestigatorDecision, InvestigatorToolCall, LinkerOutput, InvestigationConclusion, InvestigationFinding)
+from ..schemas import (
+    CaseGraph,
+    CausalEdge,
+    Hypothesis,
+    InvestigationConclusion,
+    InvestigationFinding,
+    InvestigationReport,
+    InvestigationStep,
+    InvestigatorDecision,
+    InvestigatorToolCall,
+    LinkerOutput,
+)
 from ..tools.investigation import EvidenceTools
 from .linker import DEFAULT_LAYER
 

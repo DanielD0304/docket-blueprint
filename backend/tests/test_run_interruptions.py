@@ -2,10 +2,13 @@ import asyncio
 from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase
 from unittest.mock import AsyncMock, Mock, patch
+
 from test_investigator import graph
+
 from app.agents.llm import LLM
 from app.orchestrator import CaseRunner
 from app.schemas import LinkerOutput
+
 
 class InterruptionTests(IsolatedAsyncioTestCase):
     async def test_cancellation_persists_resumable_error(self):

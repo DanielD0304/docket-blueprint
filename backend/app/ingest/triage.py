@@ -19,7 +19,7 @@ RULES: list[tuple[str, str]] = [
     (r"cockpit voice|\bcvr\b", "cvr_transcript"),
     (r"(flight data recorder|\bfdr\b).*(tabular|data|attachment 1)|tabular data", "fdr_data"),
     (r"flight data recorder|\bfdr\b", "fdr_report"),
-    (r"ads-?b|radar", "adsb_radar"),
+    (r"\bads ?b\b|radar", "adsb_radar"),  # names are normalised first: "ADS-B" -> "ads b"
     (r"air traffic|\batc\b|atis", "atc"),
     (r"human performance|\bhp\b", "hp_factual"),
     (r"interview", "interview"),

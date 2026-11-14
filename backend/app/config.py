@@ -23,8 +23,7 @@ MOCK_DELAY_S = float(os.getenv("MOCK_DELAY_S", "1.5"))
 # synced folders like OneDrive. Override with DATA_DIR (absolute, or relative to backend/).
 DATA_DIR = (BACKEND_DIR / os.getenv("DATA_DIR", str(Path.home() / "DocketBlueprintData"))).resolve()
 DOCKETS_DIR = DATA_DIR / "dockets"
-CASES_DIR = DATA_DIR / "cases"
-CASES_DIR.mkdir(parents=True, exist_ok=True)
+CASES_DIR = DATA_DIR / "cases"  # created on first write (CaseStore.create), never at import time
 
 # Citation verification threshold (rapidfuzz partial_ratio, 0-100).
 VERIFY_THRESHOLD = 85
