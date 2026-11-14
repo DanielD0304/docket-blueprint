@@ -32,6 +32,13 @@ npm install
 npm run dev          # http://localhost:5173, proxies /api -> :8000
 ```
 
+If port 8000 is occupied, start the backend with `--port 8001` and run
+`DOCKET_API_URL=http://127.0.0.1:8001 npm run dev` from `frontend` (Mac/Linux).
+
+On this NixOS checkout, `source backend/.venv/bin/activate` from the repository
+root also enables the installed Node runtime and the native libraries needed by
+NumPy. Run this in each terminal before starting either service.
+
 `http://localhost:5173/#sample` opens **synthetic demo data** (marked with a red banner) for UI work without a backend.
 
 Deep links: `#case=<id>&t=<seconds UTC>&cam=chase|side|top|orbit&view=flight|profile|causal|sources`
@@ -47,6 +54,49 @@ cd backend
 Or use the UI: **Analyse local folder** (the parameters are prefilled), or `POST /api/cases/local`. A full run with Gemini takes about 15–25 minutes: around 130 PDF chunks at roughly 50 s each, 14 in parallel, plus 7 media files. Results are cached per job in `<DATA_DIR>/cases/<id>/atoms/`, so **Re-run** only redoes fusion.
 
 **Data location:** dockets and case outputs live in `DATA_DIR`, which defaults to `~/DocketBlueprintData`. That keeps them outside the repo and outside synced folders like OneDrive. Set it in `backend/.env`. Short names like `DCA19MA086` resolve to `<DATA_DIR>/dockets/DCA19MA086` in the CLI and the UI.
+
+### Re-run the investigator without re-extracting
+
+The default final fusion step is a bounded investigator (8 turns, at most 3 tool
+requests per research turn). It can search/inspect cited evidence, inspect a
+timeline window across sources, read PDF
+passages, and ask Python for recorder-window statistics. It tests relationships
+before returning the causal graph and hypotheses. Claims referencing evidence
+it has not inspected are discarded. Recorder summaries use cached, downsampled
+profile samples and are labelled accordingly.
+
+From the repository root on Mac/Linux:
+
+```bash
+source backend/.venv/bin/activate
+cd backend
+python -m app.refuse --from-case atlas-3591 --case-id atlas-investigator-v1 --max-turns 8
+# Compare with the original single-pass linker using the same base extractions:
+python -m app.refuse --from-case atlas-3591 --case-id atlas-linker-v1 --fusion linker
+# Free tool/replay smoke test (no fabricated causal findings):
+MOCK_LLM=1 python -m app.refuse --from-case atlas-3591 --case-id test-investigator-v1
+python -m unittest discover -s tests -v
+```
+
+Each experiment requires a **new case ID**, preserves the source case, and records
+its base-case ID and extraction digest in `stats`. New runs save
+`extractions.json` before fusion changes clocks or merges atoms. Completed older
+runs rebuild from the exact extraction jobs in their event log and caches;
+missing caches fail rather than triggering paid extraction. No source inventory,
+triage, extraction or media upload is performed by `app.refuse`. PDF verification
+and investigator page reads still require the original docket files.
+
+In the UI, **Investigate again** creates a separate experiment through
+`POST /api/cases/{id}/fusion-runs` (`{"fusion":"investigator","max_turns":8}`).
+The Sources view shows public questions, tool activity, cited evidence and
+conclusions. **Replay investigation** animates just these steps without model
+calls. Both the trace and source links persist in the graph and event log, and
+CLI runs stream live to the browser. The trace is a public activity record, not
+private model reasoning. The old full-pipeline **Re-run** button still exists.
+
+ADS-B series with an unresolved `MM:SS` clock are withheld from the UTC Profile
+until their hour is matched against FDR altitude. Live extraction publishes the
+aligned preview as soon as both data sources are available.
 
 ---
 
@@ -116,6 +166,21 @@ docs/UI.md                UI requirements
 
 **Open / next** (see [AGENTS.md](AGENTS.md) for details):
 - Prompt tuning: event yield per chunk is low for some docs, and causal links are sparse (24 for 332 anomalies).
+- Check satellite and street basemap rendering and contrast.
 - Blind-mode evaluator: compare findings with the NTSB final report.
 - Learned anomaly detection on FDR data (TimesFM etc.), see PLAN.md §11.
 - Gemini context caching, an LLM conflict detector, a PDF.js viewer with quote highlight.
+
+### Basemap tiles and caching
+
+The 3D path view defaults to EOX Sentinel-2 cloudless **2016** satellite imagery
+(CC BY 4.0), with a Satellite/Streets switch. This is geographic context, not
+accident-date imagery. EOX provides a token-free, best-effort service; see
+[EOX::Maps](https://maps.eox.at/) for attribution and service details.
+
+The Streets option loads standard OpenStreetMap raster tiles directly from
+`https://tile.openstreetmap.org/{z}/{x}/{y}.png` without an API key. Normal browser
+HTTP caching persists tiles across visits, honours the server's cache headers,
+and revalidates expired tiles. Keep browser caching enabled (including in DevTools)
+to reuse them. No tile prefetch or offline download is provided. Attribution links
+to the OSM copyright page. See the [OSM tile usage policy](https://operations.osmfoundation.org/policies/tiles/).

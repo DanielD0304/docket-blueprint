@@ -5,6 +5,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { fmtT } from "../api";
+import { annotationLifecycle } from "../annotationLifecycle";
+import { interpolate, type Sample } from "../interpolation";
+import { smoothGroundTrack } from "../flightPath";
 import { ADI, ZoneBody, clamp, dt, f } from "../components/cards";
 import { SourceTag } from "../components/SourceTag";
 import {
@@ -36,12 +39,14 @@ function buildPath(g: CaseGraph, sm: SeriesMap): { pts: PathPt[]; source: string
     const k = Math.cos((last.lat * Math.PI) / 180);
     const srcFile = g.series.find((s) => s.name === "altitude_ft")?.source_file;
     const srcName = g.files.find((f) => f.file_id === srcFile)?.role === "fdr_data" ? "FDR lat/lon" : "ADS-B / radar track";
+    const ground = smoothGroundTrack(tr.map((p) => ({ t: p.t_s!,
+      x: (p.lon - last.lon) * k * 111320, z: -(p.lat - last.lat) * 110540 })));
     return {
       ref: { lat0: last.lat, lon0: last.lon, k },
-      source: srcName + (altS ? " + FDR altitude" : ""),
-      pts: tr.map((p) => {
+      source: srcName + (altS ? " + FDR altitude" : "") + " · smoothed display",
+      pts: tr.map((p, i) => {
         const alt = valueAt(altS, p.t_s) ?? p.alt_ft ?? 0;
-        return { t: p.t_s!, p: new THREE.Vector3((p.lon - last.lon) * k * 111320, Math.max(0, alt) * 0.3048, -(p.lat - last.lat) * 110540) };
+        return { t: p.t_s!, p: new THREE.Vector3(ground[i].x, Math.max(0, alt) * 0.3048, ground[i].z) };
       }),
     };
   }
@@ -191,18 +196,28 @@ function label(text: string, color = "#8ec5ff", scale = 1) {
   return sp;
 }
 
+const pathCurves = new WeakMap<PathPt[], { x: Sample[]; y: Sample[]; z: Sample[] }>();
+function curveFor(pts: PathPt[]) {
+  let curve = pathCurves.get(pts);
+  if (!curve) {
+    curve = { x: pts.map((p) => [p.t, p.p.x]), y: pts.map((p) => [p.t, p.p.y]), z: pts.map((p) => [p.t, p.p.z]) };
+    pathCurves.set(pts, curve);
+  }
+  return curve;
+}
+
 function poseAt(pts: PathPt[], t: number): { pos: THREE.Vector3; hdg: number; idx: number } | null {
   if (!pts.length) return null;
   if (t <= pts[0].t) t = pts[0].t;
   if (t >= pts[pts.length - 1].t) t = pts[pts.length - 1].t;
   let lo = 0, hi = pts.length - 1;
   while (hi - lo > 1) { const m = (lo + hi) >> 1; if (pts[m].t <= t) lo = m; else hi = m; }
-  const a = pts[lo], b = pts[hi];
-  const u = b.t === a.t ? 0 : (t - a.t) / (b.t - a.t);
-  const pos = a.p.clone().lerp(b.p, u);
+  const curve = curveFor(pts);
+  const cx = interpolate(curve.x, t)!, cy = interpolate(curve.y, t)!, cz = interpolate(curve.z, t)!;
+  const pos = new THREE.Vector3(cx.value, cy.value, cz.value);
   const i0 = Math.max(0, lo - 1), i1 = Math.min(pts.length - 1, hi + 1);
   const d = pts[i1].p.clone().sub(pts[i0].p);
-  const hdg = (Math.atan2(d.x, -d.z) * 180) / Math.PI;
+  const hdg = (Math.abs(cx.slope) + Math.abs(cz.slope) > 1e-6 ? Math.atan2(cx.slope, -cz.slope) : Math.atan2(d.x, -d.z)) * 180 / Math.PI;
   return { pos, hdg, idx: lo };
 }
 
@@ -234,22 +249,28 @@ function makeAircraft(): Model {
   // fuselage (structure), nose (flight deck), tail cone
   add(new THREE.CylinderGeometry(2.7, 2.7, 40, 28, 1, true).rotateZ(Math.PI / 2).translate(2, 0, 0), "structure");
   add(new THREE.SphereGeometry(2.7, 28, 14).scale(2.6, 1, 1).translate(22, 0, 0), "cockpit");
-  add(new THREE.ConeGeometry(2.7, 13, 28, 1, true).rotateZ(Math.PI / 2).translate(-24.5, 0.6, 0), "structure");
-  // windshield
-  add(new THREE.BoxGeometry(2.4, 0.9, 3.2).translate(25.2, 1.5, 0), "cockpit");
+  add(new THREE.ConeGeometry(2.7, 13, 28, 1, true).rotateZ(Math.PI / 2).translate(-24.5, 0, 0), "structure");
+  // Windshield panels follow the nose ellipsoid, with a narrow centre mullion.
+  // A small surface offset keeps the outlines clear without a raised box.
+  for (const phi of [Math.PI - 0.68, Math.PI + 0.04]) {
+    add(new THREE.SphereGeometry(2.715, 12, 6, phi, 0.64, 0.65, 0.47)
+      .scale(2.6, 1, 1).translate(22, 0, 0), "cockpit");
+  }
   // wings (planform in x/span), low wing with dihedral
-  const wing = extrude([[7, 0], [-8, 23], [-11.5, 23], [-3, 0]], 0.5).rotateX(Math.PI / 2);
-  add(wing.clone(), "wings", group, (m) => { m.position.set(0, -1.6, 2.4); m.rotation.x = -0.08; });
-  add(wing.clone().scale(1, 1, -1), "wings", group, (m) => { m.position.set(0, -1.6, -2.4); m.rotation.x = 0.08; });
+  // Carry roots through the centreline so they meet the curved fuselage.
+  const wing = extrude([[7, 0], [-8, 25.4], [-11.5, 25.4], [-3, 0]], 0.5).rotateX(Math.PI / 2);
+  add(wing.clone(), "wings", group, (m) => { m.position.set(0, -1.6, 0); m.rotation.x = -0.08; });
+  add(wing.clone().scale(1, 1, -1), "wings", group, (m) => { m.position.set(0, -1.6, 0); m.rotation.x = 0.08; });
   // horizontal stabiliser + vertical fin (empennage)
-  const hs = extrude([[-19, 0], [-26, 9], [-28.5, 9], [-24.5, 0]], 0.3).rotateX(Math.PI / 2);
-  add(hs.clone(), "empennage", group, (m) => { m.position.set(0, 1, 1.2); });
-  add(hs.clone().scale(1, 1, -1), "empennage", group, (m) => { m.position.set(0, 1, -1.2); });
-  add(extrude([[-16, 2.2], [-25.5, 12.5], [-29, 12.5], [-27, 2.2]], 0.35), "empennage");
+  const hs = extrude([[-19, 0], [-26, 10.2], [-28.5, 10.2], [-24.5, 0]], 0.3).rotateX(Math.PI / 2);
+  add(hs.clone(), "empennage", group, (m) => { m.position.set(0, 1, 0); });
+  add(hs.clone().scale(1, 1, -1), "empennage", group, (m) => { m.position.set(0, 1, 0); });
+  add(extrude([[-16, 1], [-25.5, 12.5], [-29, 12.5], [-27, 0.4]], 0.35), "empennage");
   // engines + pylons
   for (const s of [1, -1]) {
     add(new THREE.CylinderGeometry(1.5, 1.25, 7, 22, 1, true).rotateZ(Math.PI / 2).translate(5.5, -3.3, 8 * s), "engines");
-    add(new THREE.BoxGeometry(4, 1.6, 0.4).translate(4.5, -2.1, 8 * s), "engines");
+    // Swept pylon bridges the forward nacelle to the wing above and aft.
+    add(extrude([[-2, -0.7], [1.5, -0.7], [6.5, -2.3], [2.5, -2.3]], 0.4).translate(0, 0, 8 * s), "engines");
   }
   // antennas
   add(new THREE.BoxGeometry(0.8, 1.2, 0.2).translate(10, 3.1, 0), "comms");
@@ -261,7 +282,7 @@ function makeAircraft(): Model {
   const gear = new THREE.Group();
   group.add(gear);
   for (const [x, z] of [[-1, 3.2], [-1, -3.2], [18, 0]] as [number, number][]) {
-    add(new THREE.CylinderGeometry(0.2, 0.2, 2.6, 6).translate(x, -3.6, z), "gear", gear);
+    add(new THREE.CylinderGeometry(0.2, 0.2, 3.8, 6).translate(x, -3, z), "gear", gear);
     add(new THREE.CylinderGeometry(0.75, 0.75, 0.6, 14).rotateX(Math.PI / 2).translate(x, -5, z), "gear", gear);
   }
   const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
@@ -292,15 +313,16 @@ function kindOf(role: string | undefined, claimedBy: string | null, lane?: strin
 
 // ------------------------------------------------------------------ component
 
-interface Props { g: CaseGraph; cursor: number | null; selected: Selection; onSelect: (s: Selection) => void }
+interface Props { g: CaseGraph; cursor: number | null; selected: Selection; onSelect: (s: Selection) => void; speed?: number }
 
-export function FlightView({ g, cursor, selected, onSelect }: Props) {
+export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) {
   const sm = useMemo(() => seriesMap(g.series), [g.series]);
   const di = useMemo(() => discreteIndex(g.events), [g.events]);
   const zones = useMemo(() => byZone(g), [g]);
   const roles = useMemo(() => new Map(g.files.map((x) => [x.file_id, x.role])), [g.files]);
   const { pts, source, ref: geo } = useMemo(() => buildPath(g, sm), [g, sm]);
   const [mapOn, setMapOn] = useState(true);
+  const [showContext, setShowContext] = useState(false);
   const tEnd = pts.length ? pts[pts.length - 1].t : (cursor ?? 0);
   const t = cursor ?? tEnd;
   const [cam, setCam] = useState<Cam>(() => (location.hash.match(/cam=(chase|side|top|orbit)/)?.[1] as Cam) ?? "chase");
@@ -310,6 +332,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
   // --- flight state at t
   const v = (n: string) => valueAt(sm.get(n), t);
   const alt = v("altitude_ft"), ias = v("airspeed_kt"), pitch = v("pitch_deg"), roll = v("roll_deg");
+  const heading = v("heading_deg");
   const vs = vsAt(sm, t), aoa = v("aoa_deg");
   const fpa = vs !== null && ias ? (Math.atan2(vs / 60, Math.max(60, ias) * 1.688) * 180) / Math.PI : null;
   const gearState = [...di.entries()].find(([k]) => /gear/i.test(k));
@@ -317,6 +340,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
 
   // --- anomalies: active (t <= cursor), alarm (last 12 s), plus hover partners
   const anById = useMemo(() => new Map(g.anomalies.map((a) => [a.id, a])), [g.anomalies]);
+  const annotationStates = useMemo(() => new Map(g.anomalies.map((a) => [a.id, annotationLifecycle(a, t)])), [g.anomalies, t]);
   const links = useMemo(() => {
     const m = new Map<string, { other: string; relation: string; dir: "out" | "in"; rationale: string; conf: number }[]>();
     for (const e of g.causal_edges) {
@@ -325,11 +349,12 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
     }
     return m;
   }, [g.causal_edges]);
-  const sevRank = { critical: 0, significant: 1, minor: 2, info: 3 } as const;
   const tags = useMemo(() => {
-    const timed = g.anomalies.filter((a) => a.time?.t_s != null && a.time.t_s <= t).sort((a, b) => b.time!.t_s! - a.time!.t_s!).slice(0, 6);
-    const latent = g.anomalies.filter((a) => a.time?.t_s == null && sevRank[a.severity] <= 1).slice(0, 4);
-    // at most 3 tags per aircraft part (newest first); hovered tag + its causal partners always shown
+    const timed = g.anomalies.filter((a) => {
+      const life = annotationStates.get(a.id)!;
+      return life.state !== "hidden" && life.state !== "context";
+    }).sort((a, b) => annotationStates.get(b.id)!.lastSeen! - annotationStates.get(a.id)!.lastSeen!).slice(0, 6);
+    const latent = showContext ? g.anomalies.filter((a) => a.time?.t_s == null && (a.severity === "critical" || a.severity === "significant")).slice(0, 4) : [];
     const set = new Map<string, Anomaly>();
     const perZone = new Map<ZoneId, number>();
     for (const a of [...timed, ...latent]) {
@@ -342,40 +367,44 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
       (links.get(hoverAn) ?? []).forEach((l) => { const o = anById.get(l.other); if (o) set.set(o.id, o); });
     }
     return [...set.values()];
-  }, [g.anomalies, t, hoverAn, links, anById]);
+  }, [g.anomalies, annotationStates, hoverAn, links, anById, showContext]);
   const alarmZones = useMemo(() => {
     const s = new Set<ZoneId>();
-    g.anomalies.forEach((a) => { if (a.time?.t_s != null && a.time.t_s <= t && a.time.t_s > t - 12) s.add(zoneOfAnomaly(a)); });
+    g.anomalies.forEach((a) => {
+      const life = annotationStates.get(a.id)!;
+      if (life.state === "fresh" || life.ongoing) s.add(zoneOfAnomaly(a));
+    });
     return s;
-  }, [g.anomalies, t]);
+  }, [g.anomalies, annotationStates]);
 
   // --- voices: recent CVR / ATC + testimony (claims) relevant to what is happening
   const voices = useMemo<Voice[]>(() => {
     const out: Voice[] = [];
-    const recent = g.events.filter((e) => (e.lane === "cockpit" || e.lane === "atc") && e.time.t_s !== null && e.time.t_s <= t && e.time.t_s > t - 240)
-      .slice(-3);
+    const recent = g.events.filter((e) => (e.lane === "cockpit" || e.lane === "atc") && e.certainty !== "claimed" && e.time.t_s !== null && e.time.t_s <= t && e.time.t_s > t - 240)
+      .sort((a, b) => a.time.t_s! - b.time.t_s!).slice(-3);
     for (const e of recent) {
       out.push({ key: e.id, kind: kindOf(roles.get(e.source_files[0]), e.claimed_by, e.lane), who: e.actor ?? "", t: e.time.t_s, text: e.citations[0]?.quote || e.description,
         zone: e.lane === "atc" ? "comms" : zoneOfText(e.description) ?? "cockpit", sel: { kind: "event", item: e }, atom: e });
     }
     const claims: Voice[] = [];
+    if (!showContext) return out;
     for (const a of g.anomalies) if (a.certainty === "claimed" && (a.time?.t_s == null || a.time.t_s <= t))
       claims.push({ key: a.id, kind: kindOf(roles.get(a.source_files[0]), /witness/i.test(a.title + a.observed) ? "witness" : null), who: a.title, t: a.time?.t_s ?? null, text: a.citations[0]?.quote || a.observed,
         zone: zoneOfAnomaly(a), sel: { kind: "anomaly", item: a }, anomalyId: a.id, atom: a });
-    for (const e of g.events) if (e.certainty === "claimed" && (e.time.t_s === null || e.time.t_s <= t) && e.lane !== "cockpit" && e.lane !== "atc")
+    for (const e of g.events) if (e.certainty === "claimed" && (e.time.t_s === null || e.time.t_s <= t))
       claims.push({ key: e.id, kind: kindOf(roles.get(e.source_files[0]), e.claimed_by), who: e.claimed_by ?? e.actor ?? "", t: e.time.t_s, text: e.citations[0]?.quote || e.description,
         zone: zoneOfEvent(e), sel: { kind: "event", item: e }, atom: e });
     // prefer testimony about systems that are currently in alarm, then timed, then the rest
     claims.sort((a, b) => Number(alarmZones.has(b.zone)) - Number(alarmZones.has(a.zone)) || (b.t ?? -1e12) - (a.t ?? -1e12));
     return [...out, ...claims.slice(0, 3)];
-  }, [g.events, g.anomalies, t, roles, alarmZones]);
+  }, [g.events, g.anomalies, t, roles, alarmZones, showContext]);
 
   // ------------------------------------------------------------------ three.js
   const wrap = useRef<HTMLDivElement>(null);
   const mount = useRef<HTMLDivElement>(null);
   const overlay = useRef<SVGSVGElement>(null);
-  const live = useRef({ t, cam, pts, hoverZone, alarmZones, gearUp, pitch, roll, hoverAn, geo });
-  live.current = { t, cam, pts, hoverZone, alarmZones, gearUp, pitch, roll, hoverAn, geo };
+  const live = useRef({ t, cam, pts, hoverZone, alarmZones, gearUp, pitch, roll, hoverAn, speed, heading, geo });
+  live.current = { t, cam, pts, hoverZone, alarmZones, gearUp, pitch, roll, hoverAn, speed, heading, geo };
   const cardEls = useRef(new Map<string, { el: HTMLElement; zone: ZoneId; side: "l" | "r" }>());
   const tagEls = useRef(new Map<string, { el: HTMLElement; zone: ZoneId; slot: number }>());
   const lineEls = useRef(new Map<string, SVGPathElement>());
@@ -427,18 +456,36 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
     ro.observe(el);
 
     const prevTarget = new THREE.Vector3();
+    const tagSides = new Map<ZoneId, 1 | -1>();
+    const tagLayout = new Map<string, { x: number; y: number; side: 1 | -1 }>();
+    const easedPosition = new THREE.Vector3();
+    let easedPitch = 0, easedRoll = 0, easedYaw = 0, previousTime = NaN, previousFrame = performance.now();
     let lastCam: Cam | null = null, raf = 0, frame = 0, prevYaw = 0;
     const tmp = new THREE.Vector3();
     const loop = () => {
       raf = requestAnimationFrame(loop);
       frame++;
       const L = live.current;
+      const now = performance.now(), elapsed = Math.min(.1, Math.max(0, (now - previousFrame) / 1000));
+      previousFrame = now;
       const pose = poseAt(L.pts, L.t);
-      const pos = pose?.pos ?? new THREE.Vector3(0, 300, 0);
-      const hdg = pose?.hdg ?? 90;
-      const yaw = ((90 - hdg) * Math.PI) / 180;
+      const targetPosition = pose?.pos ?? new THREE.Vector3(0, 300, 0);
+      const hdg = L.heading ?? pose?.hdg ?? 90;
+      const targetYaw = ((90 - hdg) * Math.PI) / 180;
+      const seek = !Number.isFinite(previousTime) || Math.abs(L.t - previousTime) > Math.max(5, L.speed * .75);
+      const ease = 1 - Math.exp(-elapsed / .35);
+      if (seek) {
+        easedPosition.copy(targetPosition); easedPitch = L.pitch ?? 0; easedRoll = L.roll ?? 0; easedYaw = targetYaw;
+      } else {
+        easedPosition.lerp(targetPosition, ease);
+        easedPitch += ((L.pitch ?? 0) - easedPitch) * ease;
+        easedRoll += ((L.roll ?? 0) - easedRoll) * ease;
+        easedYaw += Math.atan2(Math.sin(targetYaw - easedYaw), Math.cos(targetYaw - easedYaw)) * ease;
+      }
+      previousTime = L.t;
+      const pos = easedPosition, yaw = easedYaw;
       model.group.position.copy(pos);
-      model.group.rotation.set(((L.roll ?? 0) * Math.PI) / 180, yaw, ((L.pitch ?? 0) * Math.PI) / 180);
+      model.group.rotation.set((easedRoll * Math.PI) / 180, yaw, (easedPitch * Math.PI) / 180);
       model.gear.visible = !L.gearUp;
       shadow.position.set(pos.x, 0.5, pos.z);
       (drop.geometry as THREE.BufferGeometry).setFromPoints([pos, new THREE.Vector3(pos.x, 0, pos.z)]);
@@ -457,6 +504,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
       const fwd = new THREE.Vector3(Math.cos(yaw), 0, -Math.sin(yaw));
       const right = new THREE.Vector3(Math.sin(yaw), 0, Math.cos(yaw)); // body +z after yaw
       if (L.cam !== lastCam) {
+        tagSides.clear(); tagLayout.clear();
         // preset placement (user can orbit / zoom from here); side uses a narrow FOV for a flat, 2D-like profile
         const preset = L.cam === "chase" ? pos.clone().addScaledVector(fwd, -62).addScaledVector(right, 22).add(new THREE.Vector3(0, 14, 0))
           : L.cam === "side" ? pos.clone().addScaledVector(right, 330).add(new THREE.Vector3(0, 4, 0))
@@ -472,8 +520,8 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
       // follow: move the camera with the aircraft; in chase/side also turn with its heading
       camera.position.add(pos.clone().sub(prevTarget));
       if (L.cam === "chase" || L.cam === "side") {
-        const dy = yaw - prevYaw;
-        if (Math.abs(dy) > 1e-6 && Math.abs(dy) < Math.PI) {
+        const dy = Math.atan2(Math.sin(yaw - prevYaw), Math.cos(yaw - prevYaw));
+        if (Math.abs(dy) > 1e-6) {
           const off = camera.position.clone().sub(pos).applyAxisAngle(new THREE.Vector3(0, 1, 0), dy);
           camera.position.copy(pos).add(off);
         }
@@ -491,24 +539,51 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
         anchor.set(z, { x: ((tmp.x + 1) / 2) * W, y: ((1 - tmp.y) / 2) * H, vis: tmp.z < 1 && Math.abs(tmp.x) < 1.3 && Math.abs(tmp.y) < 1.3 });
       });
       const tagPos = new Map<string, { x: number; y: number }>();
-      const placed: { x: number; y: number; w: number }[] = [];
-      tagEls.current.forEach(({ el: te, zone, slot }, id) => {
+      const placed: { x: number; y: number; w: number; h: number }[] = [];
+      // Keep the hovered label fixed: adding causal partners must not move it out
+      // from under the pointer and trigger a hover-enter/leave feedback loop.
+      const entries = [...tagEls.current.entries()].sort(([a], [b]) =>
+        Number(b === L.hoverAn) - Number(a === L.hoverAn));
+      entries.forEach(([id, { el: te, zone, slot }]) => {
         const a = anchor.get(zone)!;
         // stack tags of one part upward, on the outer side of the part; then push up until no overlap
-        const side = a.x > W / 2 ? 1 : -1;
+        let side = tagSides.get(zone) ?? (a.x > W / 2 ? 1 : -1);
+        if (a.x > W / 2 + 80) side = 1;
+        else if (a.x < W / 2 - 80) side = -1;
+        const frozen = id === L.hoverAn ? tagLayout.get(id) : undefined;
+        if (frozen) side = frozen.side;
+        tagSides.set(zone, side);
         const tw = te.offsetWidth || 160;
-        const x = clamp(side > 0 ? a.x + 36 : a.x - 36 - tw, 290, W - 290 - tw);
-        let y = clamp(a.y - 46 - slot * 27, 60, H - 40);
-        for (let guard = 0; guard < 20 && placed.some((p) => x < p.x + p.w + 6 && x + tw + 6 > p.x && Math.abs(y - p.y) < 25); guard++) y -= 26;
-        if (y < 50) y = 50 + placed.length * 26;
-        placed.push({ x, y, w: tw });
+        const th = te.offsetHeight || 24;
+        const margin = W >= 900 ? 290 : 12;
+        const x = frozen?.x ?? clamp(side > 0 ? a.x + 36 : a.x - 36 - tw, margin, Math.max(margin, W - margin - tw));
+        let y = frozen?.y ?? clamp(a.y - 46 - slot * (th + 6), 60, H - th - 10);
+        if (!frozen) {
+          for (let guard = 0; guard < 20; guard++) {
+            const collision = placed.find((p) => x < p.x + p.w + 6 && x + tw + 6 > p.x && y < p.y + p.h + 6 && y + th + 6 > p.y);
+            if (!collision) break;
+            y = collision.y - th - 6;
+          }
+          if (y < 50) {
+            y = 50;
+            for (let guard = 0; guard < 20; guard++) {
+              const collision = placed.find((p) => x < p.x + p.w + 6 && x + tw + 6 > p.x && y < p.y + p.h + 6 && y + th + 6 > p.y);
+              if (!collision) break;
+              y = collision.y + collision.h + 6;
+            }
+          }
+        }
+        placed.push({ x, y, w: tw, h: th });
+        tagLayout.set(id, { x, y, side });
         te.style.transform = `translate(${x}px, ${y}px)`;
+        te.style.setProperty("--popup-left", `${Math.min(0, W - x - 352)}px`);
         te.style.opacity = a.vis ? "1" : "0.25";
         const ex = side > 0 ? x : x + tw;
-        tagPos.set(id, { x: x + tw / 2, y: y + 11 });
+        tagPos.set(id, { x: x + tw / 2, y: y + th / 2 });
         const ln = lineEls.current.get(`tag-${id}`);
-        if (ln) ln.setAttribute("d", `M${ex} ${y + 11} L${a.x} ${a.y}`);
+        if (ln) ln.setAttribute("d", `M${ex} ${y + th / 2} L${a.x} ${a.y}`);
       });
+      for (const id of tagLayout.keys()) if (!tagEls.current.has(id)) tagLayout.delete(id);
       cardEls.current.forEach(({ el: ce, zone, side }, key) => {
         const ln = lineEls.current.get(key);
         if (!ln) return;
@@ -528,7 +603,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
       });
     };
     loop();
-    return () => { cancelAnimationFrame(raf); ro.disconnect(); renderer.dispose(); el.removeChild(renderer.domElement); };
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); scene3.current?.map?.dispose(); renderer.dispose(); el.removeChild(renderer.domElement); };
   }, []);
 
   // path + anomaly markers
@@ -609,7 +684,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
       <svg ref={overlay} className="flight-overlay">
         {voices.map((vc) => <path key={vc.key} ref={regLine(vc.key)} className={`lead voice ${hoverZone === vc.zone ? "hl" : ""}`} />)}
         {SYSTEM_CARDS.map(([z]) => <path key={z} ref={regLine(`sys-${z}`)} className={`lead ${alarmZones.has(z) ? "alarm" : ""} ${hoverZone === z ? "hl" : ""}`} />)}
-        {tags.map((a) => <path key={a.id} ref={regLine(`tag-${a.id}`)} className={`lead tagline sev-${a.severity}`} />)}
+        {tags.map((a) => <path key={a.id} ref={regLine(`tag-${a.id}`)} className={`lead tagline sev-${a.severity} ${annotationStates.get(a.id)!.state === "cooling" ? "cooling" : ""} ${["stale", "hidden"].includes(annotationStates.get(a.id)!.state) ? "stale" : ""}`} />)}
         {hoverLinks.map((l) => (
           <path key={l.other} ref={(el) => { const k = `${hoverAn}|${l.other}`; if (el) linkEls.current.set(k, el); else linkEls.current.delete(k); }}
             className={`causal ${l.relation === "contradicts" ? "contra" : ""}`} markerEnd="url(#fv-arrow)" />
@@ -621,9 +696,11 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
       <div className="cam-bar">
         {CAMS.map(([k, lbl]) => <button key={k} className={`btn ${cam === k ? "active" : ""}`} onClick={() => setCam(k)}>{lbl}</button>)}
         <button className={`btn ${mapOn ? "active" : ""}`} onClick={() => setMapOn(!mapOn)} title="Basemap tiles on the ground">Map</button>
+        <button className={`btn ${showContext ? "active" : ""}`} onClick={() => setShowContext(!showContext)}
+          title="Include retrospective claims and untimed findings. These are context, not flight states at the playhead.">Context</button>
         <span className="label" style={{ marginLeft: 8 }}>path: {source}</span>
       </div>
-      {mapOn && geo && <div className="attrib">© OpenStreetMap contributors · drag to orbit · scroll to zoom</div>}
+      {mapOn && geo && <div className="attrib">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a> · drag to orbit · scroll to zoom</div>}
 
       {/* left column: HUD + voices */}
       <div className="col left">
@@ -638,25 +715,26 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
             <div className={(aoa ?? 0) > 12 ? "bad" : ""}><span>α</span><b>{f(aoa, 1)}</b><small>°</small></div>
           </div>
         </div>
-        <div className="label col-label">Voices · testimony</div>
+        <div className="label col-label">{showContext ? "Voices · retrospective context" : "Recorded voices · last 4 min"}</div>
+        {showContext && <div className="card dim">Untimed findings and retrospective claims do not establish when a condition was active.</div>}
         {voices.map((vc) => (
           <div key={vc.key} ref={regCard(vc.key, vc.zone, "l")} className={`card voice k-${vc.kind} ${selected?.item.id === vc.key ? "sel" : ""}`}
             onMouseEnter={() => { setHoverZone(vc.zone); if (vc.anomalyId) setHoverAn(vc.anomalyId); }}
             onMouseLeave={() => { setHoverZone(null); setHoverAn(null); }}
             onClick={() => onSelect(vc.sel)}>
-            <div className="vhead"><span className="kind">{vc.kind}</span><span className="who">{vc.who}</span><span className="ft">{vc.t !== null ? fmtT(vc.t) : "untimed"}</span></div>
+            <div className="vhead"><span className="kind">{vc.kind}</span><span className="who">{vc.who}</span><span className="ft">{vc.t !== null ? fmtT(vc.t) : "time unknown · context"}</span></div>
             <div className="vtext">“{vc.text.slice(0, 170)}{vc.text.length > 170 ? "…" : ""}”</div>
             <div className="vzone"><SourceTag g={g} atom={vc.atom} /> → {ZONES.find((z) => z.id === vc.zone)?.label.toLowerCase()}</div>
           </div>
         ))}
-        {!voices.length && <div className="card dim">No crew / ATC / witness statements up to {fmtT(t)}</div>}
+        {!voices.length && <div className="card dim">No recorded crew / ATC statements in the last 4 minutes.</div>}
       </div>
 
       {/* right column: systems */}
       <div className="col right">
         {SYSTEM_CARDS.map(([z, label]) => {
           const d = zones[z];
-          const n = d.anomalies.filter((a) => a.time?.t_s == null || a.time.t_s <= t).length;
+          const n = d.anomalies.filter((a) => a.time?.t_s != null && a.time.t_s <= t).length;
           const last = [...d.events].reverse().find((e) => e.time.t_s !== null && e.time.t_s <= t) ?? null;
           return (
             <div key={z} ref={regCard(`sys-${z}`, z, "r")} className={`card sys ${alarmZones.has(z) ? "alarm" : ""} ${hoverZone === z ? "hl" : ""}`}
@@ -675,23 +753,25 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
         const slot = tagSlots.get(zone) ?? 0;
         tagSlots.set(zone, slot + 1);
         const isHover = hoverAn === a.id;
+        const life = annotationStates.get(a.id)!;
         const partner = hoverAn && hoverAn !== a.id ? (links.get(hoverAn) ?? []).find((l) => l.other === a.id) : undefined;
         return (
-          <div key={a.id} className={`tag sev-${a.severity} ${a.time?.t_s == null ? "latent" : ""} ${isHover ? "hover" : ""} ${partner ? "partner" : ""} ${t - (a.time?.t_s ?? -1e12) < 12 ? "fresh" : ""}`}
+          <div key={a.id} className={`tag sev-${a.severity} ${life.state === "context" ? "latent" : ""} ${isHover ? "hover" : ""} ${partner ? "partner" : ""} ${life.state === "fresh" ? "fresh" : ""} ${life.state === "cooling" ? "cooling" : ""} ${life.state === "stale" || life.state === "hidden" ? "stale" : ""}`}
             ref={(el) => { if (el) tagEls.current.set(a.id, { el, zone, slot }); else tagEls.current.delete(a.id); }}
             onMouseEnter={() => { setHoverAn(a.id); setHoverZone(zone); }} onMouseLeave={() => { setHoverAn(null); setHoverZone(null); }}
             onClick={() => onSelect({ kind: "anomaly", item: a })}>
-            <span className="dia">◆</span>{a.title.slice(0, 28)}
-            {partner && <span className="rel">{partner.dir === "in" ? "cause" : "effect"} · {a.time?.t_s != null && anById.get(hoverAn!)?.time?.t_s != null ? dt(a.time.t_s - anById.get(hoverAn!)!.time!.t_s!) : "latent"}</span>}
+            <span className="dia">◆</span><span className="tag-title">{a.title}</span>
+            {partner && <span className="rel">{partner.dir === "in" ? "cause" : "effect"} · {a.time?.t_s != null && anById.get(hoverAn!)?.time?.t_s != null ? dt(a.time.t_s - anById.get(hoverAn!)!.time!.t_s!) : "time unknown"}</span>}
             {isHover && (
               <div className="pop">
-                <div className="ph"><b>{a.title}</b><span className="ft">{a.time?.t_s != null ? fmtT(a.time.t_s) : "latent condition"}</span></div>
+                <div className="ph"><b>{a.title}</b><span className="ft">{a.time?.t_s != null ? fmtT(a.time.t_s) : "time unknown · context"}</span></div>
                 <div><SourceTag g={g} atom={a} long /> <span className="dim">{a.certainty}</span></div>
+                {life.lastSeen != null && <div className="dim">{life.ongoing ? "Ongoing in the recorded interval" : `Last observed ${fmtT(life.lastSeen)}`}</div>}
                 <div className="pr"><span>expected</span>{a.expected}</div>
                 <div className="pr"><span>observed</span>{a.observed}</div>
                 {(links.get(a.id) ?? []).map((l) => {
                   const o = anById.get(l.other); if (!o) return null;
-                  const d = o.time?.t_s != null && a.time?.t_s != null ? dt(o.time.t_s - a.time.t_s) : o.time?.t_s != null ? fmtT(o.time.t_s) : "latent";
+                  const d = o.time?.t_s != null && a.time?.t_s != null ? dt(o.time.t_s - a.time.t_s) : o.time?.t_s != null ? fmtT(o.time.t_s) : "time unknown";
                   return (
                     <div key={l.other} className="plink">
                       <span className="rl">{l.dir === "in" ? "result of" : l.relation.replace(/_/g, " ")}</span>

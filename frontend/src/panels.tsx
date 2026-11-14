@@ -1,14 +1,16 @@
 import React from "react";
 import { fmtT } from "./api";
+import { annotationLifecycle } from "./annotationLifecycle";
+import { playRange } from "./data";
 import { dt } from "./components/cards";
 import { SourceTag } from "./components/SourceTag";
 import type { Anomaly, CaseGraph, Citation, Selection } from "./types";
 import type { SourceFocus } from "./views/Sources";
 
-const STAGES = ["ingest", "triage", "extract", "verify", "align", "dedup", "link", "done"];
+const STAGES = ["ingest", "triage", "extract", "verify", "align", "dedup", "investigate", "done"];
 
 export function Header({ g, onHome, actions }: { g: CaseGraph; onHome: () => void; actions?: React.ReactNode }) {
-  const idx = STAGES.indexOf(g.stage);
+  const idx = STAGES.indexOf(g.stage === "link" ? "investigate" : g.stage);
   const c = g.config;
   return (
     <div className="header">
@@ -77,7 +79,7 @@ function Detail({ g, selected, onSelect, openSource }: { g: CaseGraph; selected:
           <>
             <div className="insp-title">{a.title} <span className={`badge sev-${a.severity}`}>{a.severity}</span></div>
             <div className="kv">
-              <span className="k">Time</span><span>{a.time?.t_s != null ? fmtT(a.time.t_s) : "latent / untimed"}</span>
+              <span className="k">Time</span><span>{a.time?.t_s != null ? fmtT(a.time.t_s) : "Unknown — not placed on the timeline"}</span>
               <span className="k">Domain</span><span>{a.domain.replace(/_/g, " ")}</span>
               <span className="k">HFACS</span><span>{a.hfacs_layer?.replace(/_/g, " ") ?? "—"}</span>
               <span className="k">Certainty</span><span>{a.certainty}</span>
@@ -89,7 +91,7 @@ function Detail({ g, selected, onSelect, openSource }: { g: CaseGraph; selected:
               const out = e.source === a.id;
               const o = byId.get(out ? e.target : e.source);
               if (!o) return null;
-              const d = o.time?.t_s != null && a.time?.t_s != null ? dt(o.time.t_s - a.time.t_s) : o.time?.t_s != null ? fmtT(o.time.t_s) : "latent";
+              const d = o.time?.t_s != null && a.time?.t_s != null ? dt(o.time.t_s - a.time.t_s) : o.time?.t_s != null ? fmtT(o.time.t_s) : "time unknown";
               return (
                 <div key={i} className="linkrow" onClick={() => onSelect({ kind: "anomaly", item: o })}>
                   <span className="rl">{out ? e.relation.replace(/_/g, " ") : "result of"}</span> <b>{o.title}</b> <span className="ft">{d}</span>
@@ -122,6 +124,7 @@ function Detail({ g, selected, onSelect, openSource }: { g: CaseGraph; selected:
 
 function Register({ g, onSelect, cursor }: { g: CaseGraph; onSelect: (s: Selection) => void; cursor: number | null }) {
   const list = g.anomalies.slice().sort((a, b) => SEV[a.severity] - SEV[b.severity] || (a.time?.t_s ?? 0) - (b.time?.t_s ?? 0));
+  const at = cursor ?? playRange(g)?.[1] ?? 0;
   return (
     <>
       <div className="insp-head"><span className="h">Abnormality register</span><span className="label">{list.length}</span></div>
@@ -136,12 +139,14 @@ function Register({ g, onSelect, cursor }: { g: CaseGraph; onSelect: (s: Selecti
         ))}
         <div className="label">Anomalies</div>
         {list.map((a) => {
-          const active = cursor !== null && a.time?.t_s != null && a.time.t_s <= cursor;
-          const recent = active && cursor! - a.time!.t_s! < 12;
+          const life = annotationLifecycle(a, at);
+          const active = life.state === "fresh" || life.state === "current";
+          const recent = life.state === "fresh";
+          const ageClass = life.state === "cooling" ? "cooling" : life.state === "stale" || life.state === "hidden" || life.state === "context" ? "stale" : "";
           return (
-            <div key={a.id} className={`regitem ${active ? "active" : ""} ${recent ? "recent" : ""}`} onClick={() => onSelect({ kind: "anomaly", item: a })}>
+            <div key={a.id} className={`regitem ${active ? "active" : ""} ${recent ? "recent" : ""} ${ageClass}`} onClick={() => onSelect({ kind: "anomaly", item: a })}>
               <div className="ri-top"><span>{a.title}</span><span className={`badge sev-${a.severity}`}>{a.severity}</span></div>
-              <div className="dim">{a.time?.t_s != null ? fmtT(a.time.t_s) : "latent"} · {a.domain.replace(/_/g, " ")} · {a.certainty}</div>
+              <div className="dim">{a.time?.t_s != null ? fmtT(a.time.t_s) : "time unknown"} · {a.domain.replace(/_/g, " ")} · {a.certainty}</div>
               <SourceTag g={g} atom={a} />
             </div>
           );

@@ -1,22 +1,24 @@
 import * as d3 from "d3";
 import { useMemo } from "react";
 import { fmtT } from "../api";
+import { valueAt } from "../data";
+import { displayPoints } from "../interpolation";
 import type { Anomaly, Selection, Series } from "../types";
 import { useSize } from "../useSize";
 
 const LEFT = 90, TOP = 20, BOTTOM = 30;
 const PREFERRED = ["altitude_ft", "altitude_ft_adsb", "airspeed_kt", "pitch_deg", "roll_deg", "radio_alt_ft"];
 
-interface Props { series: Series[]; anomalies: Anomaly[]; cursor: number | null; setCursor: (t: number | null) => void; onSelect: (s: Selection) => void }
+interface Props { series: Series[]; unresolvedFiles?: string[]; anomalies: Anomaly[]; cursor: number | null; setCursor: (t: number | null) => void; onSelect: (s: Selection) => void }
 
 /** 2D vertical-profile drawing: stacked parameter bands on a shared UTC axis. */
-export function Profile({ series, anomalies, cursor, setCursor, onSelect }: Props) {
+export function Profile({ series, unresolvedFiles = [], anomalies, cursor, setCursor, onSelect }: Props) {
   const [ref, { width, height }] = useSize<HTMLDivElement>();
   const bands = useMemo(() => {
     const byName = new Map<string, Series>();
-    series.forEach((s) => { if (!byName.has(s.name) && s.points.length) byName.set(s.name, s); });
+    series.forEach((s) => { if (s.clock_basis !== "unresolved" && !unresolvedFiles.includes(s.source_file) && !byName.has(s.name) && s.points.length) byName.set(s.name, s); });
     return PREFERRED.filter((n) => byName.has(n)).map((n) => byName.get(n)!).slice(0, 4);
-  }, [series]);
+  }, [series, unresolvedFiles]);
 
   const allT = bands.flatMap((b) => [b.points[0][0], b.points[b.points.length - 1][0]]);
   const x = d3.scaleLinear().domain(allT.length ? (d3.extent(allT) as [number, number]) : [0, 1]).range([LEFT, width - 16]);
@@ -31,8 +33,9 @@ export function Profile({ series, anomalies, cursor, setCursor, onSelect }: Prop
         {bands.map((b, i) => {
           const y0 = TOP + i * bandH;
           const y = d3.scaleLinear().domain(d3.extent(b.points, (p) => p[1]) as [number, number]).nice().range([y0 + bandH - 8, y0 + 8]);
-          const path = d3.line<[number, number]>().x((p) => x(p[0])).y((p) => y(p[1]))(b.points) ?? "";
-          const cv = cursor !== null ? b.points[d3.bisector((p: [number, number]) => p[0]).center(b.points, cursor)] : null;
+          const path = d3.line<[number, number]>().x((p) => x(p[0])).y((p) => y(p[1]))(displayPoints(b.points)) ?? "";
+          const value = valueAt(b, cursor);
+          const cv = cursor !== null && value !== null ? [cursor, value] : null;
           return (
             <g key={b.name}>
               <rect x={LEFT} y={y0} width={width - LEFT - 16} height={bandH} fill="none" stroke="var(--line-dim)" strokeWidth={0.5} />
@@ -61,6 +64,8 @@ export function Profile({ series, anomalies, cursor, setCursor, onSelect }: Prop
         {cursor !== null && <line className="cursor-line" x1={x(cursor)} x2={x(cursor)} y1={TOP} y2={height - BOTTOM} />}
       </svg>
       {!bands.length && <div className="empty">No recorder / track series yet</div>}
+      {(unresolvedFiles.length > 0 || series.some((s) => s.clock_basis === "unresolved")) &&
+        <div className="profile-clock-note">ADS-B altitude awaits UTC hour alignment; showing resolved recorder clocks.</div>}
     </div>
   );
 }

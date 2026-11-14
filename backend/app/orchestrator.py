@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import hashlib
+import json
 import logging
 import time
 import traceback
@@ -19,6 +21,7 @@ from .config import CHUNK_PAGES, MAX_CONCURRENCY, MAX_PAGES_PER_DOC
 from .fusion.clock_anchor import anchor_mmss
 from .fusion.dedup import dedup
 from .fusion.linker import link
+from .fusion.investigator import investigate
 from .fusion.time_align import align
 from .fusion.verifier import verify
 from .ingest.chunker import plan_chunks
@@ -46,7 +49,7 @@ class Job:
 
 
 class CaseRunner:
-    def __init__(self, case_id: str):
+    def __init__(self, case_id: str, *, fusion: str = "investigator", max_turns: int = 8):
         self.case_id = case_id
         self.store = CaseStore(case_id)
         self.cfg = self.store.config
@@ -57,6 +60,13 @@ class CaseRunner:
         self.track_rank = 99
         self.track_file: str | None = None
         self.mmss_files: set[str] = set()
+        if fusion not in ("investigator", "linker"):
+            raise ValueError("fusion must be investigator or linker")
+        self.fusion = fusion
+        self.max_turns = max_turns
+        self.base_mock = self.llm.mock
+        self.base_source: str | None = None
+        self.base_digest: str | None = None
 
     # ------------------------------------------------------------- helpers
     def emit(self, type_: str, **data) -> None:
@@ -166,6 +176,15 @@ class CaseRunner:
                       n_anomalies=len(payload["anomalies"]), summary=payload.get("summary"))
             self.emit("atoms", file_id=f.file_id, events=payload["events"], anomalies=payload["anomalies"],
                       track=payload.get("track", []), series=payload.get("series", []))
+            if job.kind in ("fdr", "track") and self.mmss_files:
+                # Resolve clocks for the live view without mutating the base extraction snapshot.
+                preview = self.graph.model_copy(update={
+                    "series": [s.model_copy(deep=True) for s in self.graph.series],
+                    "events": [e.model_copy(deep=True) for e in self.graph.events],
+                    "track": [p.model_copy(deep=True) for p in self.graph.track], "clocks": {}})
+                anchor_mmss(preview, self.mmss_files, self.track_file)
+                self.emit("clock_sync", series=[s.model_dump() for s in preview.series],
+                          events=[e.model_dump() for e in preview.events], track=[p.model_dump() for p in preview.track], clocks=preview.clocks)
         except Exception as e:
             log.exception("job %s failed", job.job_id)
             f.error = str(e)[:500]
@@ -208,12 +227,81 @@ class CaseRunner:
                 await self.run_job(job)
 
         await asyncio.gather(*(worker() for _ in range(MAX_CONCURRENCY + 2)))
+        self.save_extractions()
+
+    def save_extractions(self) -> None:
+        """Snapshot BEFORE clock shifts, verification and dedup mutate the evidence."""
+        snapshot = {"version": 1, "graph": self.graph.model_dump(), "mock": self.base_mock,
+                    "track_file": self.track_file, "track_rank": self.track_rank,
+                    "mmss_files": sorted(self.mmss_files)}
+        path = self.store.root / "extractions.json"
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+
+    def restore_extractions(self, source_case: str) -> None:
+        """No ingest, extraction or LLM calls. Legacy runs rebuild from their exact job caches."""
+        source = CaseStore(source_case)
+        if source_case == self.case_id:
+            raise ValueError("Fusion experiments require a new case ID to preserve the original")
+        path = source.root / "extractions.json"
+        if path.exists():
+            raw = path.read_bytes()
+            snap = json.loads(raw)
+            if snap.get("version") != 1:
+                raise ValueError("Unsupported extraction snapshot version")
+            self.graph = CaseGraph.model_validate(snap["graph"])
+            self.graph.case_id = self.case_id
+            self.files = {f.file_id: f for f in self.graph.files}
+            self.track_file, self.track_rank = snap["track_file"], snap["track_rank"]
+            self.mmss_files = set(snap["mmss_files"])
+            self.base_mock = snap["mock"]
+        else:
+            original = source.load_graph()
+            if not original or original.status != "done":
+                raise ValueError("Source must have an extraction snapshot or a completed legacy run")
+            self.base_mock = bool(original.stats.get("mock", False))
+            messages = [json.loads(l) for l in source.events_path.read_text(encoding="utf-8").splitlines() if l.strip()]
+            plan = max((i for i, m in enumerate(messages) if m["type"] == "plan"), default=-1)
+            if plan < 0:
+                raise ValueError("Legacy run has no job plan; cannot safely select its base caches")
+            jobs = {m["job_id"]: m for m in messages[plan:] if m["type"] == "job" and m["status"] == "running"}
+            if len(jobs) != messages[plan]["jobs"]:
+                raise ValueError("Legacy run has an incomplete extraction job inventory")
+            self.graph.files = [f.model_copy(deep=True) for f in original.files]
+            self.files = {f.file_id: f for f in self.graph.files}
+            for f in self.graph.files:
+                f.atoms, f.summary = 0, None
+            digester = hashlib.sha256()
+            for jid, job in sorted(jobs.items()):
+                suffix = "-mock" if self.base_mock and job["kind"] in ("pdf", "image", "media") else ""
+                cache = source.atoms_dir / f"{jid}{suffix}.json"
+                if not cache.exists():
+                    raise ValueError(f"Missing base extraction cache: {cache.name}; extraction will NOT be retried")
+                data = cache.read_bytes()
+                digester.update(jid.encode() + data)
+                self.absorb(self.files[job["file_id"]], json.loads(data))
+            raw = digester.digest()
+        self.base_source = source_case
+        self.base_digest = hashlib.sha256(raw).hexdigest()
+        self.graph.investigation = None
+        self.graph.causal_edges, self.graph.hypotheses, self.graph.conflicts = [], [], []
+        self.graph.open_questions, self.graph.occurrence_categories = [], []
+        self.graph.clocks, self.graph.stats = {}, {}
+        self.graph.status = "running"
+        self.save_extractions()
+        self.emit("files", files=[f.model_dump() for f in self.graph.files])
+        self.emit("atoms", events=[e.model_dump() for e in self.graph.events],
+                  anomalies=[a.model_dump() for a in self.graph.anomalies],
+                  track=[p.model_dump() for p in self.graph.track], series=[s.model_dump() for s in self.graph.series])
 
     async def fuse(self) -> None:
         g = self.graph
         if self.mmss_files:
             r = anchor_mmss(g, self.mmss_files, self.track_file)
             self.emit("fusion", step="clock_anchor", result=r)
+            self.emit("clock_sync", series=[s.model_dump() for s in g.series],
+                      events=[e.model_dump() for e in g.events], track=[p.model_dump() for p in g.track], clocks=g.clocks)
         self.stage("verify")
         r = await asyncio.to_thread(verify, g, self.store.raw_dir)
         self.emit("fusion", step="verify", result=r)
@@ -223,18 +311,29 @@ class CaseRunner:
         self.stage("dedup")
         r = dedup(g)
         self.emit("fusion", step="dedup", result=r)
-        self.stage("link")
-        r = await link(g)
-        self.emit("fusion", step="link", result=r)
+        self.stage("investigate" if self.fusion == "investigator" else "link")
+        if self.fusion == "investigator":
+            def progress(type_, **data):
+                self.emit(type_, **data)
+                self.store.save_graph(g)
+            r = await investigate(g, self.store.raw_dir, max_turns=self.max_turns, emit=progress)
+        else:
+            r = await link(g)
+        self.emit("fusion", step=self.fusion, result=r)
         g.events.sort(key=lambda e: (e.time.t_s is None, e.time.t_s or 0))
 
-    async def run(self) -> CaseGraph:
+    async def run(self, *, from_case: str | None = None) -> CaseGraph:
         g = self.graph
         g.status = "running"
         t0 = time.time()
+        usage_before = dict(self.llm.usage)
         try:
-            await self.ingest()
-            await self.extract()
+            if from_case:
+                await asyncio.to_thread(self.restore_extractions, from_case)
+                g = self.graph
+            else:
+                await self.ingest()
+                await self.extract()
             await self.fuse()
             g.status = "done"
             g.stats = {
@@ -242,11 +341,14 @@ class CaseRunner:
                 "skipped": sum(f.status == "skipped" for f in g.files), "events": len(g.events),
                 "timed_events": sum(e.time.t_s is not None for e in g.events), "anomalies": len(g.anomalies),
                 "edges": len(g.causal_edges), "hypotheses": len(g.hypotheses), "seconds": round(time.time() - t0, 1),
-                "llm": self.llm.usage, "mock": self.llm.mock,
+                "llm": {k: v - usage_before[k] for k, v in self.llm.usage.items()}, "mock": self.llm.mock,
+                "base_mock": self.base_mock, "fusion": self.fusion,
+                "base_case": self.base_source, "base_digest": self.base_digest,
             }
             self.stage("done")
             self.emit("done", stats=g.stats)
         except Exception as e:
+            g = self.graph
             g.status = "error"
             g.stats["error"] = str(e)
             self.store.save_graph(g)

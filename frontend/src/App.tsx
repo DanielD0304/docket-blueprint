@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { rerunCase } from "./api";
+import { investigateCase, rerunCase } from "./api";
 import { Home } from "./Home";
 import { Header, Inspector } from "./panels";
 import { makeSample } from "./sample";
@@ -35,7 +35,13 @@ export default function App() {
   const [inspOpen, setInspOpen] = useState(true);
 
   useEffect(() => {
-    const onHash = () => { setCaseId(readHash()); setSampleOn(location.hash.includes("sample")); };
+    const onHash = () => {
+      setCaseId(readHash()); setSampleOn(location.hash.includes("sample"));
+      setView((location.hash.match(/view=(\w+)/)?.[1] as View) ?? null);
+      const at = location.hash.match(/[&#]t=([\d.]+)/);
+      setCursor(at ? parseFloat(at[1]) : null);
+      setPlay((p) => ({ ...p, playing: false }));
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -62,6 +68,9 @@ export default function App() {
   const actions = !sampleOn && (
     <>
       <button className="btn" onClick={() => { setView("sources"); live.replay(25); }} title="Replay the recorded swarm run">Replay swarm</button>
+      {g.investigation && <button className="btn" onClick={() => { setView("sources"); live.replay(35, true); }}>Replay investigation</button>}
+      {g.status === "done" && <button className="btn" onClick={() => investigateCase(g.case_id).then((id) => { setView("sources"); open(id); }).catch((e) => alert(e.message))}
+        title="New investigation from base extractions; original case preserved">Investigate again</button>}
       <button className="btn" onClick={() => rerunCase(g.case_id).then(() => location.reload())} title="Re-run pipeline (extraction cached)">Re-run</button>
     </>
   );
@@ -80,8 +89,8 @@ export default function App() {
           <button className="tab" onClick={() => setInspOpen(!inspOpen)}>{inspOpen ? "Hide inspector ⇥" : "⇤ Inspector"}</button>
         </div>
         <div className="viewport frame">
-          {current === "flight" && <FlightView g={g} cursor={cursor} selected={selected} onSelect={select} />}
-          {current === "profile" && <Profile series={g.series} anomalies={g.anomalies} cursor={cursor} setCursor={(t) => t !== null && !play.playing && setCursor(t)} onSelect={select} />}
+          {current === "flight" && <FlightView g={g} cursor={cursor} selected={selected} onSelect={select} speed={play.speed} />}
+          {current === "profile" && <Profile series={g.series} unresolvedFiles={[...new Set(g.events.filter((e) => e.time.aligned_by === "mmss" && g.clocks[e.source_files[0]] == null).map((e) => e.source_files[0]))]} anomalies={g.anomalies} cursor={cursor} setCursor={(t) => t !== null && !play.playing && setCursor(t)} onSelect={select} />}
           {current === "causal" && <CausalGraph anomalies={g.anomalies} edges={g.causal_edges} hypotheses={g.hypotheses} selected={selected} onSelect={select} />}
           {current === "sources" && <Sources live={live} focus={focus} setFocus={setFocus} onSelect={select} />}
         </div>

@@ -29,4 +29,47 @@
 2. **3D path**: three.js track.
 3. **Profile**: stacked parameter bands.
 4. **Causal**: HFACS columns with hypothesis paths.
+
+The Sources view also shows the lead investigator's public activity trace:
+question → tool request → cited evidence → conclusion. Each step has a stable ID,
+turn number, phase, evidence IDs and source citations, emitted as an `investigator`
+SSE message and persisted in `CaseGraph.investigation`. **Replay investigation**
+replays this trace on its own; it makes no model calls. Source chips open the
+corresponding PDF page or media position. Reduced-motion preferences disable
+entry animations.
+
+Profile bands share a UTC axis. Sources whose hour is unresolved must not appear
+on that axis as though their partial clock were UTC; show an alignment notice
+until a `clock_sync` update arrives.
+
+The timeline overview window supports dragging and click-to-recenter; Shift-drag
+or horizontal scrolling pans the detailed strip. Plain dragging scrubs and pauses
+playback. Untimed findings are labelled "time unknown", rather than being assumed
+to be latent conditions active from the start. The Flight view hides them and
+retrospective testimony by default; **Context** reveals that material explicitly.
+
+Flight annotations age on the playback clock: blue after 5 minutes, grey after 15 minutes without a
+new observation, hidden after 30. A source-established ongoing interval stays
+visible until it ends; the inactivity clock then starts at its end. Repeated
+observations survive fusion deduplication and reset the age when playback reaches
+them. Hovering does not reset age. Hiding an annotation does not remove evidence
+from the register or causal graph. Untimed context has no invented age.
+
+Recorded samples remain unchanged. Display interpolation uses a shape-preserving
+cubic curve between samples, shared by the instruments and Profile cursor. The
+3D aircraft additionally eases position/attitude over 350 ms; large timeline jumps
+snap immediately. Labels show full titles with wrapping and use their measured
+height for collision spacing.
+
+The satellite detail patch uses 32×32 tiles at fixed zoom 14. Its bounds follow
+the aircraft's geographic tile, independent of camera mode; overlapping meshes
+and textures are reused when the patch moves. Street-map requests remain capped
+at an 8×8 patch. Integer tile bounds avoid rounding a requested patch into an
+extra row or column.
+
+The normal-flight lateral display path uses a 12-second local linear fit to
+reduce quantization steps in recorder latitude/longitude. Recorded heading drives
+the aircraft and chase camera when available, avoiding heading swings inferred
+from rounded GPS steps. Heading interpolation wraps across north. Raw track data,
+altitude and the final two minutes of lateral track are preserved.
 5. **Sources**: the swarm, the log, and a media/PDF preview.

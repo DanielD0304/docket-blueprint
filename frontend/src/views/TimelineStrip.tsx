@@ -3,6 +3,7 @@ import * as d3 from "d3";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fmtT } from "../api";
 import { playRange, seriesMap } from "../data";
+import { displayPoints } from "../interpolation";
 import type { CaseGraph, Event, Selection } from "../types";
 import { useSize } from "../useSize";
 import { SourceTag } from "../components/SourceTag";
@@ -31,9 +32,13 @@ export function TimelineStrip({ g, cursor, setCursor, play, setPlay, selected, o
   const [hover, setHover] = useState<{ x: number; e: Event } | null>(null);
   const H = AN_H + LANES.length * LANE_H + AXIS_H + 6;
 
+  useEffect(() => { setView(null); setHover(null); }, [g.case_id]);
+
   // default view: final 15 minutes (or everything if shorter)
   useEffect(() => {
-    if (range && !view) setView(range[1] - range[0] > 900 ? [range[1] - 900, range[1] + 10] : [range[0] - 5, range[1] + 5]);
+    if (range && (!view || view[1] < range[0] || view[0] > range[1])) {
+      setView(range[1] - range[0] > 900 ? [range[1] - 900, range[1] + 10] : [range[0] - 5, range[1] + 5]);
+    }
   }, [range, view]);
   const dom = view ?? [0, 1];
   const x = d3.scaleLinear().domain(dom).range([LEFT, Math.max(LEFT + 10, width - 10)]);
@@ -96,7 +101,7 @@ export function TimelineStrip({ g, cursor, setCursor, play, setPlay, selected, o
   const alt = useMemo(() => seriesMap(g.series).get("altitude_ft"), [g.series]);
   const altPath = useMemo(() => {
     if (!alt) return "";
-    const pts = alt.points.filter(([t]) => t >= dom[0] - 60 && t <= dom[1] + 60);
+    const pts = displayPoints(alt.points).filter(([t]) => t >= dom[0] - 60 && t <= dom[1] + 60);
     if (pts.length < 2) return "";
     const max = d3.max(alt.points, (p) => p[1]) || 1;
     const y = (v: number) => H - AXIS_H - (v / max) * (H - AXIS_H - 4);
@@ -107,16 +112,40 @@ export function TimelineStrip({ g, cursor, setCursor, play, setPlay, selected, o
   const anVis = anomalies.filter((a) => a.time!.t_s! >= dom[0] && a.time!.t_s! <= dom[1]);
   const svgRef = useRef<SVGSVGElement>(null);
 
+  const drag = useRef<{ pointer: number; x: number; dom: [number, number]; pan: boolean } | null>(null);
+  const pause = () => { if (play.playing) setPlay({ ...play, playing: false }); };
+  const moveWindow = (start: number, span: number) => {
+    const lo = range ? Math.max(range[0] - 5, Math.min(range[1] + 5 - span, start)) : start;
+    setView([lo, lo + span]);
+  };
   const onPointer = (e: React.PointerEvent<SVGSVGElement>) => {
-    const svg = svgRef.current!; svg.setPointerCapture(e.pointerId);
-    const set = (cx: number) => { const r = svg.getBoundingClientRect(); const px = cx - r.left; if (px >= LEFT) setCursor(x.invert(px)); };
-    set(e.clientX);
-    svg.onpointermove = (ev) => set(ev.clientX);
-    svg.onpointerup = () => { svg.onpointermove = null; };
+    if (e.button !== 0) return;
+    e.preventDefault(); pause();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    drag.current = { pointer: e.pointerId, x: e.clientX, dom: [dom[0], dom[1]], pan: e.shiftKey };
+    if (!e.shiftKey) scrub(e.clientX);
+  };
+  const scrub = (cx: number) => {
+    const r = svgRef.current!.getBoundingClientRect();
+    if (cx - r.left >= LEFT) {
+      const t = x.invert(Math.max(LEFT, Math.min(width - 10, cx - r.left)));
+      setCursor(range ? Math.max(range[0], Math.min(range[1], t)) : t);
+    }
+  };
+  const dragMove = (e: React.PointerEvent<SVGSVGElement>) => {
+    const d = drag.current;
+    if (!d || d.pointer !== e.pointerId) return;
+    if (d.pan) moveWindow(d.dom[0] - (e.clientX - d.x) / Math.max(10, width - LEFT - 10) * (d.dom[1] - d.dom[0]), d.dom[1] - d.dom[0]);
+    else scrub(e.clientX);
   };
   const onWheel = (e: React.WheelEvent<SVGSVGElement>) => {
     const r = svgRef.current!.getBoundingClientRect();
     const t0 = x.invert(e.clientX - r.left);
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY) || e.shiftKey) {
+      pause();
+      moveWindow(dom[0] + (e.deltaX || e.deltaY) / Math.max(10, width - LEFT - 10) * (dom[1] - dom[0]), dom[1] - dom[0]);
+      return;
+    }
     const k = e.deltaY > 0 ? 1.25 : 0.8;
     const w = Math.max(10, Math.min((range ? range[1] - range[0] : 3600) * 1.2, (dom[1] - dom[0]) * k));
     const u = (t0 - dom[0]) / (dom[1] - dom[0]);
@@ -133,6 +162,18 @@ export function TimelineStrip({ g, cursor, setCursor, play, setPlay, selected, o
   };
 
   const pct = range && cursor !== null ? ((cursor - range[0]) / (range[1] - range[0] || 1)) * 100 : 100;
+  const overviewDrag = useRef<{ pointer: number; x: number; start: number; span: number } | null>(null);
+  const overviewDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!range || !view || e.button !== 0) return;
+    e.preventDefault(); pause();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const r = e.currentTarget.getBoundingClientRect();
+    const span = Math.min(view[1] - view[0], range[1] - range[0] + 10);
+    const at = range[0] + (e.clientX - r.left) / r.width * (range[1] - range[0]);
+    const start = (e.target as HTMLElement).classList.contains("ov-win") ? view[0] : at - span / 2;
+    overviewDrag.current = { pointer: e.pointerId, x: e.clientX, start, span };
+    moveWindow(start, span);
+  };
   return (
     <div className="strip">
       <div className="strip-head">
@@ -145,14 +186,21 @@ export function TimelineStrip({ g, cursor, setCursor, play, setPlay, selected, o
           <button className="btn" onClick={() => preset(900)}>15 min</button>
           <button className="btn" onClick={() => preset(null)}>All</button>
         </div>
-        <div className="overview" title="Whole recording">
+        <div className="overview" title="Drag the window or click to move it · Shift-drag the timeline to pan"
+          onPointerDown={overviewDown} onPointerMove={(e) => {
+            const d = overviewDrag.current;
+            if (!d || d.pointer !== e.pointerId || !range) return;
+            moveWindow(d.start + (e.clientX - d.x) / e.currentTarget.getBoundingClientRect().width * (range[1] - range[0]), d.span);
+          }} onPointerUp={() => { overviewDrag.current = null; }} onPointerCancel={() => { overviewDrag.current = null; }}>
           <div className="ov-fill" style={{ width: `${pct}%` }} />
           {range && view && <div className="ov-win" style={{ left: `${((view[0] - range[0]) / (range[1] - range[0] || 1)) * 100}%`, width: `${((view[1] - view[0]) / (range[1] - range[0] || 1)) * 100}%` }} />}
         </div>
         <div className="clock"><span className="t">{fmtT(cursor ?? range?.[1])}</span><span className="label">UTC · T−{range ? Math.max(0, Math.round(range[1] - (cursor ?? range[1]))) : 0}s</span></div>
       </div>
       <div ref={ref} className="strip-body">
-        <svg ref={svgRef} width={width} height={H} onPointerDown={onPointer} onWheel={onWheel} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
+        <svg ref={svgRef} width={width} height={H} onPointerDown={onPointer} onPointerMove={dragMove}
+          onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }}
+          onWheel={onWheel} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
           {altPath && <path d={altPath} fill="rgba(94,225,255,0.07)" stroke="rgba(94,225,255,0.3)" />}
           {LANES.map((l, i) => (
             <g key={l.key}>

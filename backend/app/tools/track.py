@@ -46,7 +46,9 @@ def analyze_track(path: Path, sf: SourceFile, local_utc_offset_h: float = 0.0, m
         a = alt.iloc[ok]
         pts = [(float(t.iloc[i]), float(a[i])) for i in ok if pd.notna(a[i]) and pd.notna(t.iloc[i])]
         if pts:
-            series.append(Series(name="altitude_ft_adsb", unit="ft", source_file=sf.file_id, points=pts[:: max(1, len(pts) // 3000)]).model_dump())
+            series.append(Series(name="altitude_ft_adsb", unit="ft", source_file=sf.file_id,
+                                 clock_basis="unresolved" if basis == "mmss" else "utc",
+                                 points=pts[:: max(1, len(pts) // 3000)]).model_dump())
 
     # ADS-B v2 autopilot / MCP discretes -> transition events (great for the autoflight card)
     events = []

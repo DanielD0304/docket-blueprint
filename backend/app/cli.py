@@ -26,6 +26,8 @@ def main() -> None:
     ap.add_argument("--offset", type=float, default=0.0, help="local time = UTC + offset hours")
     ap.add_argument("--no-blind", action="store_true")
     ap.add_argument("--case-id")
+    ap.add_argument("--fusion", choices=("investigator", "linker"), default="investigator")
+    ap.add_argument("--max-turns", type=int, choices=range(2, 21), default=8)
     a = ap.parse_args()
     cfg = CaseConfig(title=a.title, ntsb_id=a.ntsb, date=a.date, aircraft=a.aircraft,
                      local_utc_offset_h=a.offset, blind_mode=not a.no_blind)
@@ -37,7 +39,7 @@ def main() -> None:
     if not store.meta_path.exists():
         store.create(cfg, raw_dir=folder.resolve())
     store.events_path.unlink(missing_ok=True)
-    g = asyncio.run(CaseRunner(case_id).run())
+    g = asyncio.run(CaseRunner(case_id, fusion=a.fusion, max_turns=a.max_turns).run())
     print(f"case {case_id}: {g.stats}")
 
 
