@@ -6,24 +6,25 @@ const ATLAS = {
   local_utc_offset_h: -6, blind_mode: true,
 };
 
-export function Home({ open, openSample }: { open: (id: string) => void; openSample: () => void }) {
+export function Home({ open, openSample }: { open: (id: string, demoReplay?: boolean) => void; openSample: () => void }) {
   const [cfg, setCfg] = useState<Record<string, any>>(ATLAS);
   const [files, setFiles] = useState<File[]>([]);
   const [path, setPath] = useState("../data/dockets/DCA19MA086");
   const [over, setOver] = useState(false);
   const [cases, setCases] = useState<any[]>([]);
   const [status, setStatus] = useState<string>("checking backend…");
+  const [demoMode,setDemoMode] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    health().then((h) => setStatus(`backend online · ${h.mock ? "MOCK extractor (no API key)" : `${h.models.fast} / ${h.models.pro}`}`))
+    health().then((h) => {setDemoMode(!!h.demo);setStatus(`backend online · ${h.mock ? "MOCK extractor (no API key)" : `${h.models.fast} / ${h.models.pro}`}`);})
       .catch(() => setStatus("backend offline — start uvicorn (see README) or open the synthetic sample"));
     listCases().then(setCases).catch(() => {});
   }, []);
 
-  const go = async (fn: () => Promise<string>) => {
+  const go = async (fn: () => Promise<{case_id:string;demo?:boolean}>) => {
     setBusy(true);
-    try { open(await fn()); } catch (e: any) { setStatus(String(e.message ?? e)); } finally { setBusy(false); }
+    try { const result=await fn();open(result.case_id,!!result.demo); } catch (e: any) { setStatus(String(e.message ?? e)); } finally { setBusy(false); }
   };
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setCfg({ ...cfg, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
@@ -43,17 +44,19 @@ export function Home({ open, openSample }: { open: (id: string) => void; openSam
             <input type="file" multiple hidden onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
             <div>
               <div className="h" style={{ fontSize: 16 }}>{files.length ? `${files.length} file(s) ready` : "Drop docket ZIP or files"}</div>
-              <div className="dim">{files.length ? files.slice(0, 4).map((f) => f.name).join(", ") : "PDF · CSV · XLSX · images (audio/video held for v2)"}</div>
+              <div className="dim">{files.length ? files.slice(0, 4).map((f) => f.name).join(", ") : "PDF · CSV · XLSX · images · audio · video"}</div>
             </div>
           </label>
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn primary" disabled={!files.length || busy} onClick={() => go(() => uploadCase(files, cfg))}>Upload & analyse</button>
+            <button className="btn primary" disabled={!files.length || busy} onClick={() => go(() => demoMode ? localCase("", cfg) : uploadCase(files, cfg))}>Upload & analyse</button>
+            <label className="btn" style={{cursor:"pointer"}}>Choose folder<input type="file" multiple {...{webkitdirectory:"",directory:""}} hidden onChange={e=>setFiles(Array.from(e.target.files??[]))}/></label>
             <button className="btn" onClick={openSample}>Open synthetic sample</button>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <input style={{ flex: 1, background: "rgba(0,0,0,.2)", border: "1px solid var(--line-dim)", padding: "5px 7px" }} value={path} onChange={(e) => setPath(e.target.value)} />
             <button className="btn" disabled={busy} onClick={() => go(() => localCase(path, cfg))}>Analyse local folder</button>
           </div>
+          {demoMode && <div className="label">Recorded demo mode · intake replays the configured case; uploaded files are not analyzed</div>}
           <div className="label">{status}</div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>

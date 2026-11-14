@@ -17,6 +17,7 @@ export interface LiveState {
 }
 
 type Action =
+  | { type: "reset" }
   | { type: "init"; graph: CaseGraph; mode: LiveState["mode"] }
   | { type: "msg"; msg: StreamMsg }
   | { type: "batch"; msgs: StreamMsg[] };
@@ -84,13 +85,14 @@ function apply(s: LiveState, m: StreamMsg): LiveState {
     case "done":
       return { ...s, graph: { ...g, status: "done", stats: m.stats }, log: pushLog(s.log, { ts, kind: "info", text: "■ CASE COMPLETE" }) };
     case "error":
-      return { ...s, graph: { ...g, status: "error" }, log: pushLog(s.log, { ts, kind: "error", text: `✗ ${m.error}` }) };
+      return { ...s, graph: { ...g, status: "error", stage: "error" }, log: pushLog(s.log, { ts, kind: "error", text: `✗ ${m.error}` }) };
     default:
       return s;
   }
 }
 
 function reducer(s: LiveState, a: Action): LiveState {
+  if (a.type === "reset") return initial;
   if (a.type === "init") return { ...s, graph: a.graph, mode: a.mode, jobs: {}, log: [], fresh: new Set(), fusion: {} };
   if (a.type === "msg") return apply(s, a.msg);
   return a.msgs.reduce(apply, s);
@@ -111,21 +113,22 @@ export function useCase(caseId: string | null, sample?: CaseGraph) {
   useEffect(() => {
     stopAll();
     if (sample) { dispatch({ type: "init", graph: sample, mode: "static" }); return; }
-    if (!caseId) return;
+    if (!caseId) { dispatch({type:"reset"}); return; }
     let close: (() => void) | null = null;
     let cancelled = false;
     (async () => {
       const g = await getCase(caseId);
       if (cancelled) return;
-      if (g.status === "done") { dispatch({ type: "init", graph: g, mode: "static" }); return; }
+      if (g.status === "done" || g.status === "error") { dispatch({ type: "init", graph: g, mode: "static" }); return; }
       dispatch({ type: "init", graph: empty({ ...g, files: g.files ?? [] } as CaseGraph), mode: "live" });
       // Buffer the burst of history so React renders once, then go live.
       let buffer: StreamMsg[] = [];
       let flush: number | null = null;
       close = openStream(caseId, (m) => {
-        if (m.type === "done") {
+        if (m.type === "done" || m.type === "error") {
           buffer.push(m);
           dispatch({ type: "batch", msgs: buffer }); buffer = [];
+          close?.();
           setTimeout(() => loadFinal(caseId), 300); // swap in the fused + verified graph
           return;
         }
@@ -137,20 +140,35 @@ export function useCase(caseId: string | null, sample?: CaseGraph) {
   }, [caseId, sample, loadFinal]);
 
   /** Re-play the recorded event log compressed into `seconds` — offline demo of the swarm. */
-  const replay = useCallback(async (seconds = 25, investigationOnly = false) => {
+  const replay = useCallback(async (seconds = 25, investigationOnly = false, onPhase?: (phase: "sources" | "activity") => void) => {
     if (!caseId) return;
     stopAll();
     const [g, allMsgs] = await Promise.all([getCase(caseId), getEvents(caseId)]);
     const msgs = investigationOnly ? allMsgs.filter((m) => m.type === "investigator") : allMsgs;
     dispatch({ type: "init", graph: investigationOnly ? { ...g, investigation: null } : empty(g), mode: "replay" });
-    if (!msgs.length) return;
+    if (!msgs.length) {
+      dispatch({type:"init",graph:g,mode:"static"});
+      return;
+    }
     const t0 = msgs[0].ts ?? 0, t1 = msgs[msgs.length - 1].ts ?? 1;
     const span = Math.max(0.001, t1 - t0);
+    let activityStarted = false;
+    onPhase?.("sources");
     msgs.forEach((m, i) => {
-      const at = (((m.ts ?? t0) - t0) / span) * seconds * 1000 * 0.6 + (i / msgs.length) * seconds * 1000 * 0.4;
+      const firstAgent = msgs.findIndex(x=>x.type === "investigator");
+      const at = onPhase && firstAgent >= 0 ? (i < firstAgent
+        ? (i / Math.max(1,firstAgent)) * seconds * 1000 * .6
+        : (.6 + .4 * (i-firstAgent)/Math.max(1,msgs.length-firstAgent)) * seconds * 1000)
+        : (((m.ts ?? t0) - t0) / span) * seconds * 1000 * 0.6 + (i / msgs.length) * seconds * 1000 * 0.4;
+      if (onPhase && m.type === "investigator" && !activityStarted) {
+        activityStarted = true;
+        timers.current.push(window.setTimeout(()=>onPhase("activity"),at));
+      }
       timers.current.push(window.setTimeout(() => dispatch({ type: "msg", msg: m }), at));
     });
-    timers.current.push(window.setTimeout(() => loadFinal(caseId), seconds * 1000 + 500));
+    // The completed snapshot was already fetched before replay; restore it without
+    // another large download that would leave the demo looking unfinished.
+    timers.current.push(window.setTimeout(() => dispatch({type:"init",graph:g,mode:"static"}), seconds * 1000 + 200));
   }, [caseId, loadFinal]);
 
   return { ...state, replay };

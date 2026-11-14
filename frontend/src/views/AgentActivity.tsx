@@ -9,11 +9,12 @@ import "./agentActivity.css";
 type Particle = SimulationNodeDatum & { id: string; item: ActivityNode };
 const COLORS: Record<string,string> = { source:"#719fcb", tool:"#5ee1ff", finding:"#ffbd69", hypothesis:"#bba4ff", conclusion:"#8aefbb" };
 
-export function AgentActivity({ g, openSource }: { g: CaseGraph; openSource: (f: SourceFocus) => void; replay: () => void }) {
+export function AgentActivity({ g, openSource, externalPlayback = false }: { externalPlayback?: boolean; g: CaseGraph; openSource: (f: SourceFocus) => void; replay: () => void }) {
   const report = g.investigation;
   const steps = report?.steps ?? [];
   const [cursor, setCursor] = useState(0);
   const [playing, setPlaying] = useState(true);
+  const [manualPlayback,setManualPlayback] = useState(false);
   const [selection, setSelection] = useState<string | null>(null);
   const [zoom, setZoom] = useState(.65);
   const [pan, setPan] = useState({x:0,y:0});
@@ -22,9 +23,9 @@ export function AgentActivity({ g, openSource }: { g: CaseGraph; openSource: (f:
   const particles = useRef(new Map<string,Particle>());
   const dragging = useRef<{id?:string;x:number;y:number;px:number;py:number}|null>(null);
   const simulation = useRef<ReturnType<typeof forceSimulation<Particle>> | null>(null);
-  const live = g.status === "running";
+  const live = (g.status === "running" || externalPlayback) && !manualPlayback;
   const count = live ? steps.length : Math.min(cursor,steps.length);
-  useEffect(()=>{setCursor(0);setPlaying(true);setSelection(null);particles.current.clear();},[g.case_id]);
+  useEffect(()=>{setCursor(0);setPlaying(true);setManualPlayback(false);setSelection(null);particles.current.clear();},[g.case_id]);
   useEffect(()=>{if(!playing || live || !steps.length)return;const timer=window.setInterval(()=>setCursor(n=>Math.min(steps.length,n+1)),230);return()=>clearInterval(timer);},[playing,live,steps.length]);
   const visible = useMemo(()=>{
     const trace=steps.slice(0,count), titles=new Set(trace.filter(s=>s.phase==="conclusion").map(s=>s.title));
@@ -69,7 +70,7 @@ export function AgentActivity({ g, openSource }: { g: CaseGraph; openSource: (f:
   return <div className="activity-graph-view living-graph">
     <header className="activity-graph-header"><div><span className="activity-eyebrow">Investigation in motion</span><h2>Follow the evidence</h2></div>
       <div className="living-legend">{Object.entries(COLORS).map(([k,c])=><span key={k}><i style={{background:c}}/>{k}</span>)}</div>
-      <button className="btn" onClick={()=>{setCursor(0);setPlaying(true);setSelection(null);}}>Replay from start</button>
+
     </header>
     <div className={`living-main ${active?"with-detail":""}`}>
       <div className="living-canvas" ref={ref}>
@@ -93,7 +94,7 @@ export function AgentActivity({ g, openSource }: { g: CaseGraph; openSource: (f:
       </div>
       {active&&<div className="living-detail"><button className="btn" onClick={()=>setSelection(null)}>Close details ×</button><ActivityDetail node={active} g={g} openSource={openSource}/></div>}
     </div>
-    <footer className="living-transport"><button className="btn" onClick={()=>setPlaying(!playing)}>{playing&&count<steps.length?"Pause":"Play"}</button><input aria-label="Investigation progress" type="range" min="0" max={steps.length} value={count} onChange={e=>{setPlaying(false);setCursor(Number(e.target.value));}}/><span>{count}/{steps.length}</span><button className="btn" onClick={()=>{setCursor(steps.length);setPlaying(false);}}>Show result</button></footer>
+    <footer className="living-transport"><button className="btn" onClick={()=>{setManualPlayback(true);if(count>=steps.length){setCursor(0);setPlaying(true);}else{setCursor(count);setPlaying(!playing);}}}>{playing&&count<steps.length?"Pause":"Play"}</button><input aria-label="Investigation progress" type="range" min="0" max={steps.length} value={count} onChange={e=>{setManualPlayback(true);setPlaying(false);setCursor(Number(e.target.value));}}/><span>{count}/{steps.length}</span><button className="btn" onClick={()=>{setManualPlayback(true);setCursor(steps.length);setPlaying(false);}}>Show result</button></footer>
     <div className="living-caption"><b>{latest?.agent_name??"Investigator"}</b><span>{latest?.title??"Nodes appear as evidence is read. Drag nodes to explore; scroll to zoom."}</span></div>
   </div>;
 }
