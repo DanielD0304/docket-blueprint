@@ -1,6 +1,6 @@
 // Derived, time-indexed views of the case graph used by the playback-driven sheets.
 import type { Anomaly, CaseGraph, Event, Series } from "./types";
-import { interpolate } from "./interpolation";
+import { interpolate, interpolateHeading } from "./interpolation";
 
 export type SeriesMap = Map<string, Series>;
 
@@ -16,6 +16,7 @@ export function valueAt(s: Series | undefined, t: number | null): number | null 
   if (!s || t === null || !s.points.length) return null;
   const p = s.points;
   if (t < p[0][0] - 5 || t > p[p.length - 1][0] + 5) return null;
+  if (s.name === "heading_deg" || s.name === "wind_dir_deg") return interpolateHeading(p, t);
   return interpolate(p, t)?.value ?? null;
 }
 

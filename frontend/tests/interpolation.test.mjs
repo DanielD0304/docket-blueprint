@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { interpolate, displayPoints } from "../src/interpolation.ts";
+import { interpolate, interpolateHeading, displayPoints } from "../src/interpolation.ts";
+
+test("heading interpolation crosses north without turning the long way around", () => {
+  const points = [[0, 359], [10, 1]];
+  assert.ok(Math.abs(interpolateHeading(points, 5)) < 1e-8);
+  assert.equal(interpolateHeading(points, 0), 359);
+  assert.equal(interpolateHeading(points, 10), 1);
+});
 
 test("smooth interpolation retains all recorded samples", () => {
   const points = [[0, 4], [3, 8], [40, -15], [100, 3]];

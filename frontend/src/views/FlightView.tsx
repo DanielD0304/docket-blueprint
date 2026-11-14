@@ -7,6 +7,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { fmtT } from "../api";
 import { annotationLifecycle } from "../annotationLifecycle";
 import { interpolate, type Sample } from "../interpolation";
+import { smoothGroundTrack } from "../flightPath";
 import { ADI, ZoneBody, clamp, dt, f } from "../components/cards";
 import { SourceTag } from "../components/SourceTag";
 import {
@@ -38,12 +39,14 @@ function buildPath(g: CaseGraph, sm: SeriesMap): { pts: PathPt[]; source: string
     const k = Math.cos((last.lat * Math.PI) / 180);
     const srcFile = g.series.find((s) => s.name === "altitude_ft")?.source_file;
     const srcName = g.files.find((f) => f.file_id === srcFile)?.role === "fdr_data" ? "FDR lat/lon" : "ADS-B / radar track";
+    const ground = smoothGroundTrack(tr.map((p) => ({ t: p.t_s!,
+      x: (p.lon - last.lon) * k * 111320, z: -(p.lat - last.lat) * 110540 })));
     return {
       ref: { lat0: last.lat, lon0: last.lon, k },
-      source: srcName + (altS ? " + FDR altitude" : ""),
-      pts: tr.map((p) => {
+      source: srcName + (altS ? " + FDR altitude" : "") + " · smoothed display",
+      pts: tr.map((p, i) => {
         const alt = valueAt(altS, p.t_s) ?? p.alt_ft ?? 0;
-        return { t: p.t_s!, p: new THREE.Vector3((p.lon - last.lon) * k * 111320, Math.max(0, alt) * 0.3048, -(p.lat - last.lat) * 110540) };
+        return { t: p.t_s!, p: new THREE.Vector3(ground[i].x, Math.max(0, alt) * 0.3048, ground[i].z) };
       }),
     };
   }
@@ -295,6 +298,7 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
   // --- flight state at t
   const v = (n: string) => valueAt(sm.get(n), t);
   const alt = v("altitude_ft"), ias = v("airspeed_kt"), pitch = v("pitch_deg"), roll = v("roll_deg");
+  const heading = v("heading_deg");
   const vs = vsAt(sm, t), aoa = v("aoa_deg");
   const fpa = vs !== null && ias ? (Math.atan2(vs / 60, Math.max(60, ias) * 1.688) * 180) / Math.PI : null;
   const gearState = [...di.entries()].find(([k]) => /gear/i.test(k));
@@ -365,8 +369,8 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
   const wrap = useRef<HTMLDivElement>(null);
   const mount = useRef<HTMLDivElement>(null);
   const overlay = useRef<SVGSVGElement>(null);
-  const live = useRef({ t, cam, pts, hoverZone, alarmZones, gearUp, pitch, roll, hoverAn, speed });
-  live.current = { t, cam, pts, hoverZone, alarmZones, gearUp, pitch, roll, hoverAn, speed };
+  const live = useRef({ t, cam, pts, hoverZone, alarmZones, gearUp, pitch, roll, hoverAn, speed, heading });
+  live.current = { t, cam, pts, hoverZone, alarmZones, gearUp, pitch, roll, hoverAn, speed, heading };
   const cardEls = useRef(new Map<string, { el: HTMLElement; zone: ZoneId; side: "l" | "r" }>());
   const tagEls = useRef(new Map<string, { el: HTMLElement; zone: ZoneId; slot: number }>());
   const lineEls = useRef(new Map<string, SVGPathElement>());
@@ -433,7 +437,7 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
       previousFrame = now;
       const pose = poseAt(L.pts, L.t);
       const targetPosition = pose?.pos ?? new THREE.Vector3(0, 300, 0);
-      const hdg = pose?.hdg ?? 90;
+      const hdg = L.heading ?? pose?.hdg ?? 90;
       const targetYaw = ((90 - hdg) * Math.PI) / 180;
       const seek = !Number.isFinite(previousTime) || Math.abs(L.t - previousTime) > Math.max(5, L.speed * .75);
       const ease = 1 - Math.exp(-elapsed / .35);

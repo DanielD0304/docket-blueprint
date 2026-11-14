@@ -66,4 +66,10 @@ the aircraft's geographic tile, independent of camera mode; overlapping meshes
 and textures are reused when the patch moves. Street-map requests remain capped
 at an 8×8 patch. Integer tile bounds avoid rounding a requested patch into an
 extra row or column.
+
+The normal-flight lateral display path uses a 12-second local linear fit to
+reduce quantization steps in recorder latitude/longitude. Recorded heading drives
+the aircraft and chase camera when available, avoiding heading swings inferred
+from rounded GPS steps. Heading interpolation wraps across north. Raw track data,
+altitude and the final two minutes of lateral track are preserved.
 5. **Sources**: the swarm, the log, and a media/PDF preview.

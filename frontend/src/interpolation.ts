@@ -3,6 +3,21 @@
 export type Sample = [number, number];
 const slopes = new WeakMap<Sample[], number[]>();
 const dense = new WeakMap<Sample[], Sample[]>();
+const angles = new WeakMap<Sample[], Sample[]>();
+
+export function interpolateHeading(points: Sample[], t: number): number | null {
+  let unwrapped = angles.get(points);
+  if (!unwrapped) {
+    let previous = points[0]?.[1] ?? 0;
+    unwrapped = points.map(([time, value], i) => {
+      previous = i ? previous + ((value - previous) % 360 + 540) % 360 - 180 : value;
+      return [time, previous];
+    });
+    angles.set(points, unwrapped);
+  }
+  const result = interpolate(unwrapped, t);
+  return result ? (result.value % 360 + 360) % 360 : null;
+}
 
 function tangents(points: Sample[]): number[] {
   const cached = slopes.get(points);
