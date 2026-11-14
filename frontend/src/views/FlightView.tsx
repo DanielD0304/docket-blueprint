@@ -320,7 +320,12 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
   const di = useMemo(() => discreteIndex(g.events), [g.events]);
   const zones = useMemo(() => byZone(g), [g]);
   const roles = useMemo(() => new Map(g.files.map((x) => [x.file_id, x.role])), [g.files]);
-  const { pts, source, ref: geo } = useMemo(() => buildPath(g, sm), [g, sm]);
+  const { pts, source, ref: geoRaw } = useMemo(() => buildPath(g, sm), [g, sm]);
+  // buildPath returns a new object on every graph update (once a second while a run streams in).
+  // The map layers are keyed on geo, so keep it stable by VALUE; otherwise every live update throws
+  // away all tiles and restarts loading, and the map never appears during a running analysis.
+  const geoKey = geoRaw ? `${geoRaw.lat0}|${geoRaw.lon0}|${geoRaw.k}` : "";
+  const geo = useMemo(() => geoRaw, [geoKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const [mapOn, setMapOn] = useState(true);
   const [showContext, setShowContext] = useState(false);
   const tEnd = pts.length ? pts[pts.length - 1].t : (cursor ?? 0);

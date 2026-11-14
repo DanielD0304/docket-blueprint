@@ -64,7 +64,11 @@ function apply(s: LiveState, m: StreamMsg): LiveState {
       const anIds = new Set(g.anomalies.map((a) => a.id));
       const events = g.events.concat((m.events as Event[]).filter((e) => !evIds.has(e.id) && (fresh.add(e.id), true)));
       const anomalies = g.anomalies.concat((m.anomalies as Anomaly[]).filter((a) => !anIds.has(a.id) && (fresh.add(a.id), true)));
-      return { ...s, fresh, graph: { ...g, events, anomalies, track: g.track.concat(m.track ?? []), series: g.series.concat(m.series ?? []) } };
+      // One track only, like the backend (FDR lat/lon beats ADS-B): concatenating them mixes clocks
+      // (ADS-B is MM:SS until its hour is anchored) and makes the live flight path jump.
+      const incoming = (m.track ?? []) as CaseGraph["track"];
+      const track = incoming.length > g.track.length ? incoming : g.track;
+      return { ...s, fresh, graph: { ...g, events, anomalies, track, series: g.series.concat(m.series ?? []) } };
     }
     case "fusion":
       return { ...s, fusion: { ...s.fusion, [m.step]: m.result },
