@@ -353,6 +353,13 @@ class CaseRunner:
             }
             self.stage("done")
             self.emit("done", stats=g.stats)
+        except asyncio.CancelledError:
+            g = self.graph
+            g.status = "error"
+            g.stats["error"] = "Run interrupted by shutdown or cancellation. Rerun pipeline to resume cached jobs."
+            self.store.save_graph(g)
+            self.emit("error", error=g.stats["error"])
+            raise
         except Exception as e:
             g = self.graph
             g.status = "error"

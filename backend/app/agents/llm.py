@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 from typing import TypeVar
 
@@ -14,6 +15,7 @@ log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 RETRYABLE = {408, 429, 500, 502, 503, 504}
+REQUEST_TIMEOUT_S = float(os.getenv("GEMINI_REQUEST_TIMEOUT_S", "480"))
 
 
 class LLM:
@@ -31,12 +33,12 @@ class LLM:
         from google.genai import types
 
         assert self.client is not None
-        f = await self.client.aio.files.upload(file=str(path), config=types.UploadFileConfig(mime_type=mime))
+        f = await asyncio.wait_for(self.client.aio.files.upload(file=str(path), config=types.UploadFileConfig(mime_type=mime)), timeout=REQUEST_TIMEOUT_S)
         for _ in range(240):
             if "PROCESSING" not in str(f.state):
                 break
             await asyncio.sleep(3)
-            f = await self.client.aio.files.get(name=f.name)
+            f = await asyncio.wait_for(self.client.aio.files.get(name=f.name), timeout=REQUEST_TIMEOUT_S)
         if "ACTIVE" not in str(f.state):
             raise RuntimeError(f"file upload not active: {f.state}")
         return f
@@ -51,7 +53,7 @@ class LLM:
         async with self.sem:
             for attempt in range(retries):
                 try:
-                    resp = await self.client.aio.models.generate_content(
+                    resp = await asyncio.wait_for(self.client.aio.models.generate_content(
                         model=model,
                         contents=contents,
                         config=types.GenerateContentConfig(
@@ -61,7 +63,7 @@ class LLM:
                             temperature=temperature,
                             **(extra or {}),
                         ),
-                    )
+                    ), timeout=REQUEST_TIMEOUT_S)
                     self.usage["calls"] += 1
                     um = getattr(resp, "usage_metadata", None)
                     if um:
@@ -75,6 +77,9 @@ class LLM:
                     contents = list(parts) + [f"Your previous answer failed schema validation:\n{e}\nReturn valid JSON only."]
                 except Exception as e:  # network / API errors
                     last_err = e
+                    if isinstance(e, TimeoutError):
+                        last_err = TimeoutError(f"Gemini request exceeded {REQUEST_TIMEOUT_S:g} seconds")
+                    log.warning("Model request attempt %s/%s failed (%s)", attempt + 1, retries, type(e).__name__)
                     code = getattr(e, "code", None) or getattr(e, "status_code", None)
                     if code not in RETRYABLE and attempt > 0:
                         break

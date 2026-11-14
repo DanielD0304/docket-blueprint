@@ -289,3 +289,9 @@ window. It returns cited, native-row evidence; display points remain downsampled
 All arithmetic stays in Python. State labels describe signals, not health or
 causation; a sampling gap is not proof of a failed sensor. Physical limits and
 cross-sensor consistency remain separate analyses.
+
+### If a case stays at extracting
+
+Extraction waits for every job, so the last PDF chunk or media request can keep the stage open after most files finish. Check Sources for unfinished jobs. Gemini requests have a configurable per-request limit (`GEMINI_REQUEST_TIMEOUT_S`, default 480 seconds) and bounded retries; media processing can also add waiting time. A request timeout is not a total-case deadline.
+
+Runs currently execute in the backend/CLI process, not a durable job service. Restarting that process interrupts its work. Graceful cancellation now saves an error with a resume instruction; hard termination can still leave stale `running` metadata. **Rerun pipeline** reuses valid per-job caches and retries missing work. Do not delete caches to recover an interrupted run. Durable worker leases and crash reconciliation remain open work.
