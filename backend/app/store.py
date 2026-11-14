@@ -82,7 +82,24 @@ class EventBus:
         self._subs: dict[str, set[asyncio.Queue]] = defaultdict(set)
         self._seq: dict[str, int] = defaultdict(int)
 
+    def _resume_seq(self, case_id: str) -> int:
+        """After a restart, continue numbering after the last persisted event (live clients skip seq <= replayed)."""
+        path = CaseStore(case_id).events_path
+        if not path.exists():
+            return 0
+        last = 0
+        with open(path, "rb") as f:
+            for line in f:
+                if line.strip():
+                    try:
+                        last = max(last, int(json.loads(line).get("seq", 0)))
+                    except (ValueError, json.JSONDecodeError):
+                        pass
+        return last
+
     def publish(self, case_id: str, type_: str, **data) -> None:
+        if case_id not in self._seq:
+            self._seq[case_id] = self._resume_seq(case_id)
         self._seq[case_id] += 1
         msg = {"seq": self._seq[case_id], "type": type_, "ts": time.time(), **data}
         line = json.dumps(msg, default=str)

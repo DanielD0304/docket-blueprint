@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from .config import DATA_DIR, DOCKETS_DIR, MOCK_LLM, MODEL_FAST, MODEL_PRO
+from .config import CASES_DIR, DATA_DIR, DOCKETS_DIR, MOCK_LLM, MODEL_FAST, MODEL_PRO
 from .ingest.unzip import safe_extract
 from .fusion.clock_anchor import resolve_live_clocks
 from .orchestrator import CaseRunner
@@ -28,6 +28,35 @@ app = FastAPI(title="Docket Blueprint")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 _tasks: dict[str, asyncio.Task] = {}
+
+
+@app.on_event("startup")
+def _mark_interrupted_runs() -> None:
+    """A server restart kills running pipelines. Without this, their cases stay "running" forever and the UI
+    keeps counting their open jobs as active agents. Close those jobs and mark the case interrupted;
+    "Re-run" resumes from the per-job cache."""
+    for d in CASES_DIR.iterdir() if CASES_DIR.exists() else []:
+        store = CaseStore(d.name)
+        if not store.meta_path.exists():
+            continue
+        g = store.load_graph()
+        if not g or g.status != "running":
+            continue
+        open_jobs: dict[str, dict] = {}
+        if store.events_path.exists():
+            for line in store.events_path.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    m = json.loads(line)
+                    if m.get("type") == "job":
+                        open_jobs[m["job_id"]] = m
+        for job_id, m in open_jobs.items():
+            if m.get("status") == "running":
+                bus.publish(d.name, "job", job_id=job_id, file_id=m.get("file_id"), status="interrupted")
+        g.status, g.stage = "error", "interrupted"
+        g.stats["error"] = "interrupted by a backend restart; use Re-run (finished jobs are reused from the cache)"
+        store.save_graph(g)
+        bus.publish(d.name, "error", error=g.stats["error"])
+        logging.getLogger(__name__).warning("case %s was interrupted by a restart; marked as such", d.name)
 
 
 def _new_case_id(cfg: CaseConfig) -> str:
