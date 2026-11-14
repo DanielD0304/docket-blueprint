@@ -67,7 +67,24 @@ const tile2lat = (y: number, z: number) => { const n = Math.PI - (2 * Math.PI * 
 const lon2tile = (lon: number, z: number) => Math.floor(((lon + 180) / 360) * 2 ** z);
 const lat2tile = (lat: number, z: number) => Math.floor(((1 - Math.log(Math.tan((lat * Math.PI) / 180) + 1 / Math.cos((lat * Math.PI) / 180)) / Math.PI) / 2) * 2 ** z);
 
-/** Dark basemap tiles (© OpenStreetMap contributors © CARTO), tinted blueprint blue, laid on the ground plane. */
+/** OpenStreetMap standard tiles (no API key; CARTO now requires one) laid on the ground plane.
+ * The shader inverts luminance so land goes dark and water / coastlines / roads / labels glow as blueprint linework;
+ * additive blending lets the black drop out. Keep the tile count low (OSM tile usage policy). */
+function invertedMaterial(opacity: number) {
+  const mat = new THREE.MeshBasicMaterial({ color: 0xa9d4ff, transparent: true, opacity, depthWrite: false, blending: THREE.AdditiveBlending });
+  mat.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <map_fragment>",
+      `#ifdef USE_MAP
+        vec4 texel = texture2D( map, vMapUv );
+        float lum = dot( texel.rgb, vec3( 0.299, 0.587, 0.114 ) );
+        diffuseColor.rgb *= vec3( pow( clamp( 1.0 - lum, 0.0, 1.0 ), 1.4 ) );
+      #endif`,
+    );
+  };
+  return mat;
+}
+
 function addTiles(group: THREE.Group, ref: GeoRef, box: [number, number, number, number], zoom: number, y: number, opacity: number, maxTiles = 64) {
   const [latMin, latMax, lonMin, lonMax] = box;
   const x0 = lon2tile(lonMin, zoom), x1 = lon2tile(lonMax, zoom), y0 = lat2tile(latMax, zoom), y1 = lat2tile(latMin, zoom);
@@ -76,9 +93,8 @@ function addTiles(group: THREE.Group, ref: GeoRef, box: [number, number, number,
   loader.setCrossOrigin("anonymous");
   for (let tx = x0; tx <= x1; tx++) for (let ty = y0; ty <= y1; ty++) {
     const nw = toScene(ref, tile2lat(ty, zoom), tile2lon(tx, zoom)), se = toScene(ref, tile2lat(ty + 1, zoom), tile2lon(tx + 1, zoom));
-    const mat = new THREE.MeshBasicMaterial({ color: 0xa8c8ff, transparent: true, opacity, depthWrite: false });
-    const sub = "abcd"[(tx + ty) % 4];
-    loader.load(`https://${sub}.basemaps.cartocdn.com/dark_all/${zoom}/${tx}/${ty}.png`, (tex) => { tex.colorSpace = THREE.SRGBColorSpace; mat.map = tex; mat.needsUpdate = true; });
+    const mat = invertedMaterial(opacity);
+    loader.load(`https://tile.openstreetmap.org/${zoom}/${tx}/${ty}.png`, (tex) => { tex.colorSpace = THREE.SRGBColorSpace; mat.map = tex; mat.needsUpdate = true; });
     const m = new THREE.Mesh(new THREE.PlaneGeometry(se.x - nw.x, se.z - nw.z).rotateX(-Math.PI / 2), mat);
     m.position.set((nw.x + se.x) / 2, y, (nw.z + se.z) / 2);
     m.renderOrder = -1;
@@ -186,12 +202,15 @@ function makeAircraft(): Model {
 type VoiceKind = "CVR" | "ATC" | "WITNESS" | "INTERVIEW" | "PARTY" | "STATEMENT";
 interface Voice { key: string; kind: VoiceKind; who: string; t: number | null; text: string; zone: ZoneId; sel: Selection; anomalyId?: string; atom: Event | Anomaly }
 
+// The card type follows the SOURCE DOCUMENT first (a party submission quoting the CVR is still a party claim).
 function kindOf(role: string | undefined, claimedBy: string | null, lane?: string): VoiceKind {
-  if (claimedBy && /witness/i.test(claimedBy)) return "WITNESS";
-  if (role === "cvr_transcript" || lane === "cockpit") return "CVR";
-  if (role === "atc" || lane === "atc") return "ATC";
-  if (role === "interview") return "INTERVIEW";
   if (role === "party_submission") return "PARTY";
+  if (role === "interview") return "INTERVIEW";
+  if (claimedBy && /witness/i.test(claimedBy)) return "WITNESS";
+  if (role === "cvr_transcript") return "CVR";
+  if (role === "atc" || role === "audio") return "ATC";
+  if (lane === "cockpit") return role ? "STATEMENT" : "CVR";
+  if (lane === "atc") return "ATC";
   return "STATEMENT";
 }
 
@@ -234,9 +253,18 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
   const tags = useMemo(() => {
     const timed = g.anomalies.filter((a) => a.time?.t_s != null && a.time.t_s <= t).sort((a, b) => b.time!.t_s! - a.time!.t_s!).slice(0, 6);
     const latent = g.anomalies.filter((a) => a.time?.t_s == null && sevRank[a.severity] <= 1).slice(0, 4);
+    // at most 3 tags per aircraft part (newest first); hovered tag + its causal partners always shown
     const set = new Map<string, Anomaly>();
-    [...timed, ...latent].forEach((a) => set.set(a.id, a));
-    if (hoverAn) (links.get(hoverAn) ?? []).forEach((l) => { const o = anById.get(l.other); if (o) set.set(o.id, o); });
+    const perZone = new Map<ZoneId, number>();
+    for (const a of [...timed, ...latent]) {
+      const z = zoneOfAnomaly(a), n = perZone.get(z) ?? 0;
+      perZone.set(z, n + 1);
+      if (n < 3) set.set(a.id, a);
+    }
+    if (hoverAn) {
+      const h = anById.get(hoverAn); if (h) set.set(h.id, h);
+      (links.get(hoverAn) ?? []).forEach((l) => { const o = anById.get(l.other); if (o) set.set(o.id, o); });
+    }
     return [...set.values()];
   }, [g.anomalies, t, hoverAn, links, anById]);
   const alarmZones = useMemo(() => {
@@ -276,7 +304,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
   const tagEls = useRef(new Map<string, { el: HTMLElement; zone: ZoneId; slot: number }>());
   const lineEls = useRef(new Map<string, SVGPathElement>());
   const linkEls = useRef(new Map<string, SVGPathElement>());
-  const scene3 = useRef<{ scene: THREE.Scene; flown: THREE.Line; markers: THREE.Group; pathGroup: THREE.Group; ground: THREE.Group; labels: THREE.Group } | null>(null);
+  const scene3 = useRef<{ scene: THREE.Scene; flown: THREE.Line; markers: THREE.Group; pathGroup: THREE.Group; ground: THREE.Group; labels: THREE.Group; detail: THREE.Group } | null>(null);
 
   useEffect(() => {
     const el = mount.current!, ov = overlay.current!;
@@ -299,6 +327,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
     big.position.y = 0.5;
     scene.add(big);
     const ground = new THREE.Group(); scene.add(ground);
+    const detail = new THREE.Group(); scene.add(detail);
     const labels = new THREE.Group(); scene.add(labels);
     const fine = new THREE.GridHelper(4000, 40, C.gridFine, C.gridFine);
     (fine.material as THREE.Material).transparent = true; (fine.material as THREE.Material).opacity = 0.35;
@@ -313,7 +342,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
     scene.add(shadow);
     const drop = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineDashedMaterial({ color: C.warn, dashSize: 30, gapSize: 20 }));
     scene.add(drop);
-    scene3.current = { scene, flown, markers, pathGroup, ground, labels };
+    scene3.current = { scene, flown, markers, pathGroup, ground, labels, detail };
 
     const ro = new ResizeObserver(() => {
       const w = el.clientWidth, h = el.clientHeight;
@@ -353,7 +382,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
         // preset placement (user can orbit / zoom from here); side uses a narrow FOV for a flat, 2D-like profile
         const preset = L.cam === "chase" ? pos.clone().addScaledVector(fwd, -62).addScaledVector(right, 22).add(new THREE.Vector3(0, 14, 0))
           : L.cam === "side" ? pos.clone().addScaledVector(right, 330).add(new THREE.Vector3(0, 4, 0))
-          : L.cam === "top" ? pos.clone().addScaledVector(fwd, -40).add(new THREE.Vector3(0, 900, 0))
+          : L.cam === "top" ? pos.clone().addScaledVector(fwd, -60).add(new THREE.Vector3(0, 2500, 0))
           : pos.clone().add(new THREE.Vector3(-260, 140, 260));
         camera.fov = L.cam === "side" ? 14 : 50;
         camera.updateProjectionMatrix();
@@ -477,10 +506,23 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
     const pad = 0.4;
     const box: [number, number, number, number] = [Math.min(...lats) - pad, Math.max(...lats) + pad, Math.min(...lons) - pad, Math.max(...lons) + pad];
     const zOver = [9, 8, 7, 6, 5, 4].find((z) => (lon2tile(box[3], z) - lon2tile(box[2], z) + 1) * (lat2tile(box[0], z) - lat2tile(box[1], z) + 1) <= 48) ?? 4;
-    addTiles(s.ground, geo, box, zOver, -1, 0.75);
-    const d = 0.35; // ~35 km around the last point in higher detail
-    addTiles(s.ground, geo, [geo.lat0 - d, geo.lat0 + d, geo.lon0 - d, geo.lon0 + d], 11, 0, 0.9, 36);
+    addTiles(s.ground, geo, box, zOver, -1, 0.6);
   }, [mapOn, geo, pts.length, g.track]);
+
+  // sharp zoom-14 patch with place / road labels (5×5 tiles ≈ 10 km) that follows the aircraft;
+  // rebuilt only when it crosses a tile. Lower layers are label-free so nothing bleeds through (additive blending).
+  const DETAIL_Z = 14;
+  const here = geo && pts.length ? poseAt(pts, t)?.pos : null;
+  const hereLat = here && geo ? geo.lat0 - here.z / 110540 : null;
+  const hereLon = here && geo ? geo.lon0 + here.x / (geo.k * 111320) : null;
+  const tileKey = hereLat !== null && hereLon !== null ? `${lon2tile(hereLon, DETAIL_Z)}/${lat2tile(hereLat, DETAIL_Z)}` : "";
+  useEffect(() => {
+    const s = scene3.current; if (!s) return;
+    s.detail.clear();
+    if (!mapOn || !geo || !tileKey) return;
+    const [tx, ty] = tileKey.split("/").map(Number);
+    addTiles(s.detail, geo, [tile2lat(ty + 4, DETAIL_Z), tile2lat(ty - 3, DETAIL_Z), tile2lon(tx - 3, DETAIL_Z), tile2lon(tx + 4, DETAIL_Z)], DETAIL_Z, 1, 0.9, 64); // tile range is inclusive: 8×8
+  }, [mapOn, geo, tileKey]);
 
   // ------------------------------------------------------------------ render overlay
   const tagSlots = new Map<ZoneId, number>();
@@ -510,7 +552,7 @@ export function FlightView({ g, cursor, selected, onSelect }: Props) {
         <button className={`btn ${mapOn ? "active" : ""}`} onClick={() => setMapOn(!mapOn)} title="Basemap tiles on the ground">Map</button>
         <span className="label" style={{ marginLeft: 8 }}>path: {source}</span>
       </div>
-      {mapOn && geo && <div className="attrib">© OpenStreetMap contributors © CARTO · drag to orbit · scroll to zoom</div>}
+      {mapOn && geo && <div className="attrib">© OpenStreetMap contributors · drag to orbit · scroll to zoom</div>}
 
       {/* left column: HUD + voices */}
       <div className="col left">

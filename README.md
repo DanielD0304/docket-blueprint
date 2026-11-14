@@ -105,12 +105,17 @@ docs/UI.md                UI requirements
 - End-to-end pipeline (mock and Gemini).
 - Real Atlas 3591 data: the FDR CSV (CST→UTC, 20 series, lat/lon track), ADS-B with hour recovery (median altitude error 8 ft), the radar `.ppb`, and media extraction.
 - Live SSE UI.
-- 3D flight view with orbit controls in all camera modes, map tiles and time marks.
-- Layered causal graph and source chips.
+- 3D flight view with orbit controls in all camera modes, an OpenStreetMap ground (inverted to a blueprint look; zoom-14 patch follows the aircraft) and time marks.
+- Layered causal graph and source chips on every item.
+
+**First full Gemini run on Atlas 3591** (local only, `data/` is not in git):
+- 25 min, 141 calls, about 2.6 M input tokens.
+- 1,668 events, 332 anomalies, 24 causal links, 3 hypotheses. The top one, at 92%, is inadvertent go-around → somatogravic illusion → nose-down inputs.
+- The ATC audio was aligned to UTC through 3 anchors with 0.2 s spread.
+- This was not a blind test: the docket has no final report, but party submissions discuss the theory.
 
 **Open / next** (see [AGENTS.md](AGENTS.md) for details):
-- Check the 3D basemap rendering. Additive blending on the dark CARTO tiles was planned for better contrast.
-- Look over the results of the first full Gemini run on Atlas 3591, then tune the prompts (event yield per chunk is low for some docs).
+- Prompt tuning: event yield per chunk is low for some docs, and causal links are sparse (24 for 332 anomalies).
 - Blind-mode evaluator: compare findings with the NTSB final report.
 - Learned anomaly detection on FDR data (TimesFM etc.), see PLAN.md §11.
 - Gemini context caching, an LLM conflict detector, a PDF.js viewer with quote highlight.

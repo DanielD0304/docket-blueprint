@@ -94,8 +94,11 @@ export function CausalGraph({ anomalies, edges, hypotheses, selected, onSelect }
   // fit to view on data change, then free zoom/pan
   useEffect(() => {
     if (!svgRef.current) return;
-    const k = Math.min(1.2, (size.width - 20) / L.width, (size.height - 20) / L.height);
-    const init = d3.zoomIdentity.translate((size.width - L.width * k) / 2, Math.max(10, (size.height - L.height * k) / 2)).scale(k);
+    // fit if that stays readable; otherwise start at a readable zoom at the root causes and let the user pan
+    const fit = Math.min(1.2, (size.width - 20) / L.width, (size.height - 60) / L.height);
+    const k = Math.max(fit, Math.min(0.9, (size.height - 60) / L.height));
+    const x0 = L.width * k <= size.width ? (size.width - L.width * k) / 2 : 10;
+    const init = d3.zoomIdentity.translate(x0, Math.max(50, (size.height - L.height * k) / 2)).scale(k);
     const z = d3.zoom<SVGSVGElement, unknown>().scaleExtent([0.2, 3]).on("zoom", (e) => setTf(e.transform));
     d3.select(svgRef.current).call(z).call(z.transform, init);
   }, [L, size.width, size.height]);
@@ -138,8 +141,9 @@ export function CausalGraph({ anomalies, edges, hypotheses, selected, onSelect }
         <g transform={tf.toString()}>
           {Array.from({ length: L.nCols }, (_, r) => (
             <g key={r}>
-              <text x={PAD + r * (W + COL_GAP)} y={PAD} className="lane-label">{colLabel(r).toUpperCase()}</text>
-              {r < L.nCols - 1 && <text x={PAD + r * (W + COL_GAP) + W + COL_GAP / 2} y={PAD} textAnchor="middle" className="lane-label">→</text>}
+              <text x={PAD + r * (W + COL_GAP)} y={PAD} className="cg-col">{colLabel(r).toUpperCase()}</text>
+              <line x1={PAD + r * (W + COL_GAP)} x2={PAD + r * (W + COL_GAP) + W} y1={PAD + 8} y2={PAD + 8} stroke="var(--line-dim)" />
+              {r < L.nCols - 1 && <text x={PAD + r * (W + COL_GAP) + W + COL_GAP / 2} y={PAD} textAnchor="middle" className="cg-col">→</text>}
             </g>
           ))}
           {L.edges.map((e, i) => {

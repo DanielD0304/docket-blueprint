@@ -32,13 +32,16 @@ MOCK_LLM=1 .venv/Scripts/python -m app.cli <folder> --case-id test-x    # free e
 * **Radar `.ppb`:** STARS playback, tab-separated, 2.5 M rows. Columns 42/43 ("MSAW Active", "CA/MCI Active") are most likely *processing enabled* flags, not fired alerts, so they're deliberately not shown as alarms.
 * **Ancillary FDR data** (docket items 37/38 in DCA19MA086) comes from a *different aircraft*. Triage excludes anything titled "ancillary".
 * **Simulator videos** are re-enactments: `atoms.py` turns their events into facts so they never reach the accident timeline.
+* **Map tiles:** CARTO basemaps now return an "API KEY REQUIRED" image. Use `tile.openstreetmap.org` (attribution shown, keep the tile count low). The tile range in `addTiles` is inclusive at both ends: n×n tiles around a centre means (n+1)² requests, so check `maxTiles`.
+* **Voice card type** comes from the source document's role first: a party submission quoting the CVR is shown as PARTY, not CVR.
 * **Time model:** `t_s` is seconds since 00:00 UTC on the accident date. Multi-day history (72-h crew history) gives values outside 0–86400; that's fine.
 
 ## Where to start on open items
 
 | Item | Where |
 |---|---|
-| Brighter blueprint basemap (additive blending on dark tiles) | `frontend/src/views/FlightView.tsx` → `addTiles` |
+| Basemap tuning (OSM tiles, inverted-luminance shader + additive blending; CARTO needs an API key now) | `frontend/src/views/FlightView.tsx` → `addTiles`, `invertedMaterial` |
+| Denser causal graph (only 24 edges for 332 anomalies): linker gets top 150 anomalies; consider per-hypothesis linking | `backend/app/fusion/linker.py`, `LINKER_PROMPT` |
 | Prompt tuning / event yield | `backend/app/agents/prompts.py` (`EXTRACT_BASE`, `ROLE_PROMPTS`, `MEDIA_PROMPTS`) |
 | Blind-mode evaluator agent | new `backend/app/fusion/evaluator.py`; final report is in the docket but excluded at triage |
 | FDR learned anomaly detection (TimesFM, matrix profile, change points) | `backend/app/tools/fdr.py`, PLAN.md §11 |

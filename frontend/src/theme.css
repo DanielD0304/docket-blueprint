@@ -97,7 +97,8 @@ a:hover { text-decoration: underline; }
 .linkrow, .regitem { padding: 6px 8px; border: 1px solid transparent; border-left: 2px solid var(--line-dim); cursor: pointer; line-height: 1.35; }
 .linkrow:hover, .regitem:hover { background: rgba(94, 225, 255, 0.07); border-color: var(--line-dim); }
 .rl { color: var(--accent); text-transform: uppercase; font-size: 10px; letter-spacing: 0.08em; }
-.regitem .ri-top { display: flex; justify-content: space-between; gap: 6px; }
+.regitem .ri-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
+.regitem .ri-top .badge { flex: none; }
 .regitem { opacity: 0.6; }
 .regitem.active { opacity: 1; border-left-color: var(--warn); }
 .regitem.recent { background: rgba(255, 93, 93, 0.12); border-left-color: var(--crit); animation: pulse 0.8s 3; }
@@ -208,6 +209,7 @@ a:hover { text-decoration: underline; }
 .legend { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: var(--ink-dim); text-transform: uppercase; letter-spacing: 0.06em; }
 .legend i { width: 8px; height: 8px; display: inline-block; }
 .cg-node { cursor: pointer; transition: opacity 0.2s; }
+.cg-col { fill: var(--ink-dim); font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em; }
 .cg-text { display: flex; flex-direction: column; gap: 2px; font-family: var(--mono); font-size: 11px; line-height: 1.25; color: var(--ink); overflow: hidden; height: 100%; }
 .cg-text b { font-weight: 500; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .cg-text span { color: var(--ink-dim); font-size: 9.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
