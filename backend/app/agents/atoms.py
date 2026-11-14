@@ -1,7 +1,8 @@
 """Convert LLM extractions into stored, citation-carrying atoms."""
 from __future__ import annotations
 
-from ..schemas import Anomaly, Citation, Entity, Event, Extraction, Fact, LLMCitation, LLMTime, SourceFile, TimeRef
+from ..schemas import (Anomaly, Citation, Entity, Event, Extraction, Fact, LLMCitation, LLMTime,
+                       SourceFile, TimeRef)
 from ..timeparse import to_case_seconds
 
 LANE_BY_CATEGORY = {
