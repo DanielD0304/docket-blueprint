@@ -60,4 +60,10 @@ cubic curve between samples, shared by the instruments and Profile cursor. The
 3D aircraft additionally eases position/attitude over 350 ms; large timeline jumps
 snap immediately. Labels show full titles with wrapping and use their measured
 height for collision spacing.
+
+The satellite detail patch uses 32×32 tiles at fixed zoom 14. Its bounds follow
+the aircraft's geographic tile, independent of camera mode; overlapping meshes
+and textures are reused when the patch moves. Street-map requests remain capped
+at an 8×8 patch. Integer tile bounds avoid rounding a requested patch into an
+extra row or column.
 5. **Sources**: the swarm, the log, and a media/PDF preview.

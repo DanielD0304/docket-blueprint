@@ -89,19 +89,41 @@ function invertedMaterial(opacity: number) {
 
 
 type Basemap = "satellite" | "streets";
+type TileMesh = THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+const tileLayers = new WeakMap<THREE.Group, { key: string; tiles: Map<string, TileMesh> }>();
+function releaseTile(tile: TileMesh) {
+  tile.removeFromParent(); tile.geometry.dispose(); tile.material.map?.dispose(); tile.material.dispose();
+}
+function clearTiles(group: THREE.Group) {
+  tileLayers.get(group)?.tiles.forEach(releaseTile);
+  tileLayers.delete(group);
+  group.clear();
+}
 
 /** Raster basemaps laid on the ground plane.
  * TextureLoader uses normal browser image requests: the persistent HTTP cache honours
  * provider Cache-Control/Expires and conditionally revalidates expired tiles (ETag/Last-Modified).
  * Keep URLs stable; do not add cache busters or bypass the browser cache.
  */
-function addTiles(group: THREE.Group, ref: GeoRef, box: [number, number, number, number], zoom: number, y: number, opacity: number, basemap: Basemap, maxTiles = 64, onError?: () => void) {
+function addTiles(group: THREE.Group, ref: GeoRef, box: [number, number, number, number], zoom: number, y: number, opacity: number, basemap: Basemap, maxTiles = 64, onError?: () => void, tileRange?: [number, number, number, number]) {
   const [latMin, latMax, lonMin, lonMax] = box;
-  const x0 = lon2tile(lonMin, zoom), x1 = lon2tile(lonMax, zoom), y0 = lat2tile(latMax, zoom), y1 = lat2tile(latMin, zoom);
+  const [x0, x1, y0, y1] = tileRange ?? [lon2tile(lonMin, zoom), lon2tile(lonMax, zoom), lat2tile(latMax, zoom), lat2tile(latMin, zoom)];
   if ((x1 - x0 + 1) * (y1 - y0 + 1) > maxTiles) return;
+  const key = `${basemap}/${zoom}/${ref.lat0}/${ref.lon0}/${ref.k}/${y}/${opacity}`;
+  if (tileLayers.get(group)?.key !== key) {
+    clearTiles(group);
+    tileLayers.set(group, { key, tiles: new Map() });
+  }
+  const tiles = tileLayers.get(group)!.tiles;
+  for (const [id, tile] of tiles) {
+    const [tx, ty] = id.split("/").map(Number);
+    if (tx < x0 || tx > x1 || ty < y0 || ty > y1) { releaseTile(tile); tiles.delete(id); }
+  }
   const loader = new THREE.TextureLoader();
   loader.setCrossOrigin("anonymous");
   for (let tx = x0; tx <= x1; tx++) for (let ty = y0; ty <= y1; ty++) {
+    const id = `${tx}/${ty}`;
+    if (tiles.has(id)) continue;
     const nw = toScene(ref, tile2lat(ty, zoom), tile2lon(tx, zoom)), se = toScene(ref, tile2lat(ty + 1, zoom), tile2lon(tx + 1, zoom));
     const mat = basemap === "streets" ? invertedMaterial(opacity) : new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity, depthWrite: false });
     const url = basemap === "satellite"
@@ -112,11 +134,13 @@ function addTiles(group: THREE.Group, ref: GeoRef, box: [number, number, number,
     // An unloaded tile must not draw a solid rectangle over the basemap below it.
     m.visible = false;
     loader.load(url, (tex) => {
+      if (m.parent !== group) { tex.dispose(); return; }
       tex.colorSpace = THREE.SRGBColorSpace;
       mat.map = tex; mat.needsUpdate = true; m.visible = true;
     }, undefined, () => onError?.());
     m.renderOrder = -1;
     group.add(m);
+    tiles.set(id, m);
   }
 }
 
@@ -539,7 +563,7 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
       });
     };
     loop();
-    return () => { cancelAnimationFrame(raf); ro.disconnect(); renderer.dispose(); el.removeChild(renderer.domElement); };
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); clearTiles(ground); clearTiles(detail); renderer.dispose(); el.removeChild(renderer.domElement); };
   }, []);
 
   // path + anomaly markers
@@ -589,11 +613,10 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
   // ground: basemap tiles — overview of the whole route + detail around the final position
   useEffect(() => {
     const s = scene3.current; if (!s) return;
-    s.ground.clear();
     setTileError(false);
     let active = true;
     const onTileError = () => { if (active) setTileError(true); };
-    if (!mapOn || !geo || pts.length < 2) return;
+    if (!mapOn || !geo || pts.length < 2) { clearTiles(s.ground); return; }
     const lats = g.track.map((p) => p.lat), lons = g.track.map((p) => p.lon);
     const pad = 0.4;
     const box: [number, number, number, number] = [Math.min(...lats) - pad, Math.max(...lats) + pad, Math.min(...lons) - pad, Math.max(...lons) + pad];
@@ -602,8 +625,8 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
     return () => { active = false; };
   }, [mapOn, basemap, geo, pts.length, g.track]);
 
-  // sharp zoom-14 patch with place / road labels (5×5 tiles ≈ 10 km) that follows the aircraft;
-  // rebuilt only when it crosses a tile. Lower layers are label-free so nothing bleeds through (additive blending).
+  // Fixed zoom in geographic coordinates: camera presets never change coverage
+  // or resolution. Keep overlapping tiles when the aircraft crosses a tile.
   const DETAIL_Z = 14;
   const here = geo && pts.length ? poseAt(pts, t)?.pos : null;
   const hereLat = here && geo ? geo.lat0 - here.z / 110540 : null;
@@ -611,10 +634,12 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
   const tileKey = hereLat !== null && hereLon !== null ? `${lon2tile(hereLon, DETAIL_Z)}/${lat2tile(hereLat, DETAIL_Z)}` : "";
   useEffect(() => {
     const s = scene3.current; if (!s) return;
-    s.detail.clear();
-    if (!mapOn || !geo || !tileKey) return;
+    if (!mapOn || !geo || !tileKey) { clearTiles(s.detail); return; }
     const [tx, ty] = tileKey.split("/").map(Number);
-    addTiles(s.detail, geo, [tile2lat(ty + 4, DETAIL_Z), tile2lat(ty - 3, DETAIL_Z), tile2lon(tx - 3, DETAIL_Z), tile2lon(tx + 4, DETAIL_Z)], DETAIL_Z, 1, 0.9, basemap, 64); // tile range is inclusive: 8×8
+    const half = basemap === "satellite" ? 16 : 4;
+    // Integer tile bounds avoid floating-point round-trip errors dropping a row.
+    addTiles(s.detail, geo, [0, 0, 0, 0], DETAIL_Z, 1, 0.9, basemap, (half * 2) ** 2,
+      () => setTileError(true), [tx - half + 1, tx + half, ty - half + 1, ty + half]);
   }, [mapOn, basemap, geo, tileKey]);
 
   // ------------------------------------------------------------------ render overlay
