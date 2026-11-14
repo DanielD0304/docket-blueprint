@@ -72,4 +72,19 @@ reduce quantization steps in recorder latitude/longitude. Recorded heading drive
 the aircraft and chase camera when available, avoiding heading swings inferred
 from rounded GPS steps. Heading interpolation wraps across north. Raw track data,
 altitude and the final two minutes of lateral track are preserved.
+
+**Hypotheses** is a separate view: select an explanation to read its narrative,
+supporting/challenging/context evidence and each saved contribution rationale.
+Evidence without causal graph edges is still included. Each contribution links
+to source quotes; older runs explicitly indicate when an individual rationale
+was not recorded. Model assessments are labelled as judgments, not probabilities.
+
+**Agent activity** shows the persisted investigator trace at full size: public
+questions, tool requests, cited results and conclusions. **Replay recorded
+activity** animates these actual steps without a new model call. Cases created
+by the old single-pass linker show an explanation that no trace was saved.
+
+The Profile flags sustained repeated 0/384-kt source runs as suspect data, leaves
+gaps in the main airspeed line by default, and offers **Show raw suspect samples**.
+This is a display-quality flag, not a finding of aircraft overspeed or failure.
 5. **Sources**: the swarm, the log, and a media/PDF preview.

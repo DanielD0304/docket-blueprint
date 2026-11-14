@@ -22,7 +22,8 @@ export interface Anomaly {
   observations?: AnomalyObservation[];
 }
 export interface CausalEdge { source: string; target: string; relation: string; rationale: string; confidence: number; evidence_ids?: string[]; citations?: Citation[] }
-export interface Hypothesis { id: string; title: string; narrative: string; supporting_anomaly_ids: string[]; contradicting_evidence: string[]; confidence: number; evidence_ids?: string[]; citations?: Citation[] }
+export interface HypothesisContribution { evidence_id: string; role: "supports" | "challenges" | "context"; explanation: string; citations?: Citation[] }
+export interface Hypothesis { id: string; title: string; narrative: string; supporting_anomaly_ids: string[]; contradicting_evidence: string[]; confidence: number; evidence_ids?: string[]; citations?: Citation[]; contributions?: HypothesisContribution[] }
 export interface Conflict { id: string; description: string; atom_ids: string[]; preferred_atom_id: string | null; reason: string }
 
 export type FileStatus = "queued" | "processing" | "done" | "skipped" | "error";

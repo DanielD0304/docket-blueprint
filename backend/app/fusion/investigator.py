@@ -39,6 +39,9 @@ Final output: edges reference existing anomaly IDs, evidence_ids reference IDs a
 returned by tools. Include both endpoint anomaly IDs in each edge's evidence_ids plus any
 additional supporting evidence. Every hypothesis needs inspected supporting_anomaly_ids and
 evidence_ids. Claims without inspected, cited evidence will be discarded. Use confidence 0..1.
+For each hypothesis, provide contributions: evidence_id, role (supports/challenges/context),
+and a specific explanation of HOW that item bears on the hypothesis. Include relevant facts,
+events, source passages and recorder checks, even if they have no causal graph edge.
 Give 2-5 hypotheses when evidence permits; include contrary evidence and open questions.
 Do not create new factual atoms. You cannot access excluded/final-report sources.
 Stop when the core links are supported or the turn budget is reached. On the final turn,
@@ -173,8 +176,16 @@ def apply_conclusion(graph, out, tools, report, step):
                 or any(i not in tools.seen for i in ids) or not citations(ids) or not 0 <= h.confidence <= 1):
             report.rejected_claims += 1
             continue
+        contributions = []
+        for c in h.contributions:
+            if c.evidence_id not in tools.seen:
+                report.rejected_claims += 1
+                continue
+            contributions.append({**c.model_dump(), "citations": citations([c.evidence_id])})
+        ids = list(dict.fromkeys(ids + [c["evidence_id"] for c in contributions]))
         cs = citations(ids)
-        graph.hypotheses.append(Hypothesis(id=f"hy-{len(graph.hypotheses)}", **h.model_dump(), citations=cs))
+        payload = {**h.model_dump(), "evidence_ids": ids, "contributions": contributions}
+        graph.hypotheses.append(Hypothesis(id=f"hy-{len(graph.hypotheses)}", **payload, citations=cs))
         step(report.turns, "conclusion", h.title, detail=h.narrative, evidence_ids=ids, citations=cs)
     graph.open_questions = out.open_questions[:20]
     if report.rejected_claims:

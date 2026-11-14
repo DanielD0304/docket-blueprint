@@ -123,10 +123,14 @@ class InvestigatorTests(IsolatedAsyncioTestCase):
                     {"source": "a1", "target": "a3", "relation": "triggered", "rationale": "Uninspected",
                      "confidence": .9, "evidence_ids": ["a1", "a3"]}],
                 "hypotheses": [{"title": "Candidate", "narrative": "Qualified explanation",
-                                "supporting_anomaly_ids": ["a1"], "confidence": .5, "evidence_ids": ["a1"]}]}))]
+                                "supporting_anomaly_ids": ["a1"], "confidence": .5, "evidence_ids": ["a1"],
+                                "contributions": [{"evidence_id": "a1", "role": "supports", "explanation": "The inspected excursion supports this candidate."},
+                                                  {"evidence_id": "a3", "role": "challenges", "explanation": "Uninspected evidence must be rejected."}]}]}))]
         messages = []
         result = await investigate(g, Path("/tmp"), llm=FakeLLM(decisions), emit=lambda t, **m: messages.append(m))
-        self.assertEqual(result["rejected_claims"], 1)
+        self.assertEqual(result["rejected_claims"], 2)
+        self.assertEqual(len(g.hypotheses[0].contributions), 1)
+        self.assertEqual(g.hypotheses[0].contributions[0].citations[0].quote, "rows 1-2, column pitch: 30")
         self.assertEqual(len(g.causal_edges), 1)
         self.assertEqual(g.causal_edges[0].citations[0].quote, "rows 1-2, column pitch: 30")
         self.assertEqual(g.investigation.status, "done")

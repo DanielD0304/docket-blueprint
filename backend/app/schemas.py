@@ -122,6 +122,12 @@ class LLMLayer(BaseModel):
     layer: HfacsLayer
 
 
+class LLMHypothesisContribution(BaseModel):
+    evidence_id: str
+    role: Literal["supports", "challenges", "context"]
+    explanation: str = Field(description="Explain specifically how this evidence supports, challenges, or contextualizes this hypothesis")
+
+
 class LLMHypothesis(BaseModel):
     title: str
     narrative: str
@@ -129,6 +135,7 @@ class LLMHypothesis(BaseModel):
     contradicting_evidence: list[str] = []
     confidence: float = Field(description="0..1")
     evidence_ids: list[str] = Field([], description="IDs returned by investigator tools supporting or challenging this hypothesis")
+    contributions: list[LLMHypothesisContribution] = []
 
 
 class LinkerOutput(BaseModel):
@@ -243,6 +250,13 @@ class CausalEdge(BaseModel):
     citations: list[Citation] = []
 
 
+class HypothesisContribution(BaseModel):
+    evidence_id: str
+    role: Literal["supports", "challenges", "context"]
+    explanation: str
+    citations: list[Citation] = []
+
+
 class Hypothesis(BaseModel):
     id: str
     title: str
@@ -252,6 +266,7 @@ class Hypothesis(BaseModel):
     confidence: float
     evidence_ids: list[str] = []
     citations: list[Citation] = []
+    contributions: list[HypothesisContribution] = []
 
 
 class InvestigationStep(BaseModel):

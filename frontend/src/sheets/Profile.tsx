@@ -1,19 +1,23 @@
 import * as d3 from "d3";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { fmtT } from "../api";
 import { valueAt } from "../data";
 import { displayPoints } from "../interpolation";
+import { suspectAirspeedRuns } from "../profileQuality";
 import type { Anomaly, Selection, Series } from "../types";
 import { useSize } from "../useSize";
 
 const LEFT = 90, TOP = 20, BOTTOM = 30;
 const PREFERRED = ["altitude_ft", "altitude_ft_adsb", "airspeed_kt", "pitch_deg", "roll_deg", "radio_alt_ft"];
 
-interface Props { series: Series[]; unresolvedFiles?: string[]; anomalies: Anomaly[]; cursor: number | null; setCursor: (t: number | null) => void; onSelect: (s: Selection) => void }
+interface Props { series: Series[]; unresolvedFiles?: string[]; anomalies: Anomaly[]; cursor: number | null; setCursor: (t: number | null) => void; onSelect: (s: Selection) => void; openSource?: (fileId: string) => void }
 
 /** 2D vertical-profile drawing: stacked parameter bands on a shared UTC axis. */
-export function Profile({ series, unresolvedFiles = [], anomalies, cursor, setCursor, onSelect }: Props) {
+export function Profile({ series, unresolvedFiles = [], anomalies, cursor, setCursor, onSelect, openSource }: Props) {
   const [ref, { width, height }] = useSize<HTMLDivElement>();
+  const [showSuspect, setShowSuspect] = useState(false);
+  const airspeed = series.find((s) => s.name === "airspeed_kt");
+  const suspect = useMemo(() => airspeed ? suspectAirspeedRuns(airspeed.points) : [], [airspeed]);
   const bands = useMemo(() => {
     const byName = new Map<string, Series>();
     series.forEach((s) => { if (s.clock_basis !== "unresolved" && !unresolvedFiles.includes(s.source_file) && !byName.has(s.name) && s.points.length) byName.set(s.name, s); });
@@ -32,14 +36,19 @@ export function Profile({ series, unresolvedFiles = [], anomalies, cursor, setCu
         onMouseLeave={() => setCursor(null)}>
         {bands.map((b, i) => {
           const y0 = TOP + i * bandH;
+          const issues = b.name === "airspeed_kt" ? suspect : [];
+          const isSuspect = (t: number) => issues.some((r) => t >= r.start && t <= r.end);
           const y = d3.scaleLinear().domain(d3.extent(b.points, (p) => p[1]) as [number, number]).nice().range([y0 + bandH - 8, y0 + 8]);
-          const path = d3.line<[number, number]>().x((p) => x(p[0])).y((p) => y(p[1]))(displayPoints(b.points)) ?? "";
-          const value = valueAt(b, cursor);
+          const path = d3.line<[number, number]>().defined((p) => showSuspect || !isSuspect(p[0])).x((p) => x(p[0])).y((p) => y(p[1]))(displayPoints(b.points)) ?? "";
+          const value = cursor !== null && !showSuspect && isSuspect(cursor) ? null : valueAt(b, cursor);
           const cv = cursor !== null && value !== null ? [cursor, value] : null;
           return (
             <g key={b.name}>
               <rect x={LEFT} y={y0} width={width - LEFT - 16} height={bandH} fill="none" stroke="var(--line-dim)" strokeWidth={0.5} />
-              <text className="lane-label" x={10} y={y0 + 16}>{b.name.replace(/_/g, " ").toUpperCase()}</text>
+              <text className="lane-label" x={10} y={y0 + 16}>{b.name === "airspeed_kt" ? "AIRSPEED KT" : b.name.replace(/_/g, " ").toUpperCase()}
+                {b.name === "airspeed_kt" && <title>Recorded computed airspeed (Airspeed Comp), not ground speed or true airspeed.</title>}</text>
+              {issues.map((r) => <rect key={r.start} x={x(r.start)} y={y0 + 2} width={Math.max(2, x(r.end) - x(r.start))} height={bandH - 4}
+                fill="rgba(255,181,71,.08)" stroke="var(--warn)" strokeDasharray="2 3"><title>{`Suspect source pattern: cached profile samples ${r.firstSample}–${r.lastSample} in ${b.source_file} repeat 0 and 384 kt. Raw values are retained; this is not an interpreted flight-speed excursion.`}</title></rect>)}
               <g className="axis">
                 {y.ticks(3).map((t) => (
                   <g key={t}><line x1={LEFT - 4} x2={LEFT} y1={y(t)} y2={y(t)} /><text x={LEFT - 6} y={y(t) + 3} textAnchor="end">{t}</text></g>
@@ -64,6 +73,9 @@ export function Profile({ series, unresolvedFiles = [], anomalies, cursor, setCu
         {cursor !== null && <line className="cursor-line" x1={x(cursor)} x2={x(cursor)} y1={TOP} y2={height - BOTTOM} />}
       </svg>
       {!bands.length && <div className="empty">No recorder / track series yet</div>}
+      {suspect.length > 0 && <div className="profile-quality"><span>Computed airspeed: repeated 0/384 kt source values flagged.</span>
+        <button className="btn" onClick={() => setShowSuspect(!showSuspect)}>{showSuspect ? "Hide suspect samples" : "Show raw suspect samples"}</button>
+        {airspeed && openSource && <button className="btn" onClick={() => openSource(airspeed.source_file)}>Source</button>}</div>}
       {(unresolvedFiles.length > 0 || series.some((s) => s.clock_basis === "unresolved")) &&
         <div className="profile-clock-note">ADS-B altitude awaits UTC hour alignment; showing resolved recorder clocks.</div>}
     </div>
