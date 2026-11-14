@@ -15,7 +15,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from .config import CASES_DIR, DATA_DIR, DEMO_CASE_ID, DEMO_MODE, DOCKETS_DIR, MOCK_LLM, MODEL_FAST, MODEL_PRO
+from .config import (
+    CASES_DIR,
+    CORS_ORIGINS,
+    DATA_DIR,
+    DEMO_CASE_ID,
+    DEMO_MODE,
+    DOCKETS_DIR,
+    LOCAL_CASE_ROOTS,
+    MOCK_LLM,
+    MODEL_FAST,
+    MODEL_PRO,
+)
 from .fusion.clock_anchor import resolve_live_clocks
 from .ingest.unzip import safe_extract
 from .orchestrator import CaseRunner
@@ -25,7 +36,7 @@ from .store import CaseStore, bus
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 app = FastAPI(title="Docket Blueprint")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["GET", "POST"], allow_headers=["*"])
 
 _tasks: dict[str, asyncio.Task] = {}
 
@@ -134,6 +145,8 @@ async def create_local_case(body: LocalCase):
     if not p.is_absolute():  # short names like "DCA19MA086" are looked up in DATA_DIR/dockets
         p = DOCKETS_DIR / p if (DOCKETS_DIR / p).is_dir() else p
     p = p.resolve()
+    if not any(p.is_relative_to(root) for root in LOCAL_CASE_ROOTS):
+        raise HTTPException(403, "folder is outside DATA_DIR; add its parent to LOCAL_CASE_ROOTS in backend/.env")
     if not p.is_dir():
         raise HTTPException(400, f"not a directory: {p}")
     case_id = _new_case_id(body.config)
