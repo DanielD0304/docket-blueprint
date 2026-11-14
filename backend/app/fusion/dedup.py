@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from rapidfuzz import fuzz
 
-from ..schemas import Anomaly, CaseGraph, Conflict, Entity, Event
+from ..schemas import Anomaly, AnomalyObservation, CaseGraph, Conflict, Entity, Event
 
 WINDOW_S = 3.0
 SIM = 85
@@ -45,12 +45,17 @@ def _merge_events(events: list[Event]) -> tuple[list[Event], list[Conflict]]:
 def _merge_anomalies(anoms: list[Anomaly]) -> list[Anomaly]:
     out: list[Anomaly] = []
     for a in anoms:
+        if not a.observations and a.time and a.time.t_s is not None:
+            a.observations = [AnomalyObservation(start_s=a.time.t_s, citations=list(a.citations))]
         twin = next((o for o in out if o.domain == a.domain and
                      fuzz.token_set_ratio(o.title + " " + o.observed, a.title + " " + a.observed) >= SIM), None)
         if twin is None:
             out.append(a)
             continue
         twin.citations += a.citations
+        # Keep individual observations: merging citations must not erase recurrences
+        # or imply that a problem was continuous between distant observations.
+        twin.observations += a.observations
         twin.source_files = sorted(set(twin.source_files) | set(a.source_files))
         sev = ["info", "minor", "significant", "critical"]
         if sev.index(a.severity) > sev.index(twin.severity):

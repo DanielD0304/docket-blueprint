@@ -1,26 +1,22 @@
 // Derived, time-indexed views of the case graph used by the playback-driven sheets.
 import type { Anomaly, CaseGraph, Event, Series } from "./types";
+import { interpolate } from "./interpolation";
 
 export type SeriesMap = Map<string, Series>;
 
 export function seriesMap(series: Series[]): SeriesMap {
   const m = new Map<string, Series>();
-  for (const s of series) if (s.points.length && !m.has(s.name)) m.set(s.name, s);
+  for (const s of series) if (s.clock_basis !== "unresolved" && s.points.length && !m.has(s.name)) m.set(s.name, s);
   if (!m.has("altitude_ft") && m.has("altitude_ft_adsb")) m.set("altitude_ft", m.get("altitude_ft_adsb")!);
   return m;
 }
 
-/** Linear interpolation at t; null outside the series' range (+-5 s tolerance). */
+/** Shape-preserving display interpolation; null outside coverage (+-5 s tolerance). */
 export function valueAt(s: Series | undefined, t: number | null): number | null {
   if (!s || t === null || !s.points.length) return null;
   const p = s.points;
   if (t < p[0][0] - 5 || t > p[p.length - 1][0] + 5) return null;
-  let lo = 0, hi = p.length - 1;
-  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (p[mid][0] <= t) lo = mid; else hi = mid; }
-  const [t0, v0] = p[lo], [t1, v1] = p[hi];
-  if (t1 === t0 || t <= t0) return v0;
-  if (t >= t1) return v1;
-  return v0 + ((v1 - v0) * (t - t0)) / (t1 - t0);
+  return interpolate(p, t)?.value ?? null;
 }
 
 /** Values in [t - span, t] for sparklines. */
@@ -169,9 +165,10 @@ export function sourceLine(s: SourceInfo): string {
 /** Time range for playback: recorder coverage if present, else timed events. */
 export function playRange(g: CaseGraph): [number, number] | null {
   const ts: number[] = [];
-  g.series.forEach((s) => { if (s.points.length) ts.push(s.points[0][0], s.points[s.points.length - 1][0]); });
+  const unresolved = new Set(g.events.filter((e) => e.time.aligned_by === "mmss" && g.clocks[e.source_files[0]] == null).map((e) => e.source_files[0]));
+  g.series.forEach((s) => { if (s.clock_basis !== "unresolved" && !unresolved.has(s.source_file) && s.points.length) ts.push(s.points[0][0], s.points[s.points.length - 1][0]); });
   if (!ts.length) {
-    g.events.forEach((e) => e.time.t_s !== null && ts.push(e.time.t_s));
+    g.events.forEach((e) => e.time.t_s !== null && e.time.aligned_by !== "mmss" && ts.push(e.time.t_s));
     g.anomalies.forEach((a) => a.time?.t_s != null && ts.push(a.time.t_s));
   }
   if (!ts.length) return null;

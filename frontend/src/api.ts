@@ -43,6 +43,15 @@ export async function rerunCase(id: string): Promise<void> {
   await fetch(`/api/cases/${id}/rerun`, { method: "POST" });
 }
 
+export async function investigateCase(id: string): Promise<string> {
+  const r = await fetch(`/api/cases/${id}/fusion-runs`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fusion: "investigator", max_turns: 8 }),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return (await r.json()).case_id;
+}
+
 export function openStream(id: string, onMsg: (m: StreamMsg) => void): () => void {
   const es = new EventSource(`/api/cases/${id}/stream`);
   es.onmessage = (e) => {

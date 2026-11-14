@@ -114,6 +114,7 @@ class LLMEdge(BaseModel):
     relation: Relation
     rationale: str
     confidence: float = Field(description="0..1")
+    evidence_ids: list[str] = Field([], description="IDs returned by investigator tools supporting this relationship")
 
 
 class LLMLayer(BaseModel):
@@ -127,6 +128,7 @@ class LLMHypothesis(BaseModel):
     supporting_anomaly_ids: list[str]
     contradicting_evidence: list[str] = []
     confidence: float = Field(description="0..1")
+    evidence_ids: list[str] = Field([], description="IDs returned by investigator tools supporting or challenging this hypothesis")
 
 
 class LinkerOutput(BaseModel):
@@ -135,6 +137,24 @@ class LinkerOutput(BaseModel):
     hypotheses: list[LLMHypothesis] = []
     open_questions: list[str] = []
     occurrence_categories: list[str] = Field([], description="ICAO CICTT codes, e.g. LOC-I, CFIT, SCF-PP")
+
+
+class InvestigatorToolCall(BaseModel):
+    tool: Literal["list_sources", "search_evidence", "inspect_evidence", "timeline_window", "read_page", "recorder_window"]
+    query: str = ""
+    evidence_ids: list[str] = []
+    file_id: str = ""
+    page: int = 1
+    series_name: str = ""
+    start_s: float | None = None
+    end_s: float | None = None
+
+
+class InvestigatorDecision(BaseModel):
+    question: str = Field(description="Short public investigation objective, not private reasoning")
+    action: Literal["research", "conclude"]
+    tools: list[InvestigatorToolCall] = []
+    conclusion: LinkerOutput | None = None
 
 
 # ---------------------------------------------------------------- stored
@@ -172,6 +192,12 @@ class Event(BaseModel):
     verified: bool | None = None
 
 
+class AnomalyObservation(BaseModel):
+    start_s: float
+    end_s: float | None = None  # only set when a source/tool establishes duration
+    citations: list[Citation]
+
+
 class Anomaly(BaseModel):
     id: str
     time: TimeRef | None = None
@@ -186,6 +212,7 @@ class Anomaly(BaseModel):
     hfacs_layer: HfacsLayer | None = None
     related_event_ids: list[str] = []
     verified: bool | None = None
+    observations: list[AnomalyObservation] = []
 
 
 class Entity(BaseModel):
@@ -212,6 +239,8 @@ class CausalEdge(BaseModel):
     relation: Relation
     rationale: str
     confidence: float
+    evidence_ids: list[str] = []
+    citations: list[Citation] = []
 
 
 class Hypothesis(BaseModel):
@@ -221,6 +250,29 @@ class Hypothesis(BaseModel):
     supporting_anomaly_ids: list[str]
     contradicting_evidence: list[str] = []
     confidence: float
+    evidence_ids: list[str] = []
+    citations: list[Citation] = []
+
+
+class InvestigationStep(BaseModel):
+    id: str
+    turn: int
+    phase: Literal["started", "question", "tool_call", "tool_result", "conclusion", "error", "finished"]
+    title: str
+    detail: str = ""
+    tool: str | None = None
+    evidence_ids: list[str] = []
+    citations: list[Citation] = []
+
+
+class InvestigationReport(BaseModel):
+    status: Literal["running", "done", "budget_exhausted", "error"] = "running"
+    model: str
+    max_turns: int
+    turns: int = 0
+    tool_calls: int = 0
+    rejected_claims: int = 0
+    steps: list[InvestigationStep] = []
 
 
 class Conflict(BaseModel):
@@ -272,6 +324,7 @@ class Series(BaseModel):
     unit: str = ""
     source_file: str
     points: list[tuple[float, float]]  # (t_s, value)
+    clock_basis: Literal["utc", "unresolved"] = "utc"
 
 
 class CaseConfig(BaseModel):
@@ -302,3 +355,4 @@ class CaseGraph(BaseModel):
     track: list[TrackPoint] = []
     series: list[Series] = []
     stats: dict = {}
+    investigation: InvestigationReport | None = None

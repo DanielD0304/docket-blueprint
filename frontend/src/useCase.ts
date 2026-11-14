@@ -22,7 +22,7 @@ type Action =
   | { type: "batch"; msgs: StreamMsg[] };
 
 const empty = (g: CaseGraph): CaseGraph => ({
-  ...g, events: [], anomalies: [], track: [], series: [], causal_edges: [], hypotheses: [], open_questions: [],
+  ...g, events: [], anomalies: [], track: [], series: [], causal_edges: [], hypotheses: [], open_questions: [], investigation: null,
   files: g.files.map((f) => ({ ...f, status: f.excluded ? "skipped" : "queued", jobs_done: 0, atoms: 0 })),
 });
 
@@ -69,6 +69,16 @@ function apply(s: LiveState, m: StreamMsg): LiveState {
     case "fusion":
       return { ...s, fusion: { ...s.fusion, [m.step]: m.result },
         log: pushLog(s.log, { ts, kind: "fusion", text: `◆ ${String(m.step).toUpperCase()} ${JSON.stringify(m.result).slice(0, 120)}` }) };
+    case "clock_sync":
+      return { ...s, graph: { ...g, series: m.series, events: m.events, track: m.track, clocks: m.clocks } };
+    case "investigator": {
+      const prior = g.investigation;
+      const steps = [...(prior?.steps ?? []).filter((x) => x.id !== m.step.id), m.step];
+      return { ...s, graph: { ...g, investigation: {
+        model: prior?.model ?? "Gemini", max_turns: m.max_turns, turns: m.turns,
+        tool_calls: m.tool_calls, rejected_claims: prior?.rejected_claims ?? 0, status: m.status, steps,
+      } }, log: pushLog(s.log, { ts, kind: "fusion", text: `◇ ${m.step.title}` }) };
+    }
     case "done":
       return { ...s, graph: { ...g, status: "done", stats: m.stats }, log: pushLog(s.log, { ts, kind: "info", text: "■ CASE COMPLETE" }) };
     case "error":
@@ -125,11 +135,12 @@ export function useCase(caseId: string | null, sample?: CaseGraph) {
   }, [caseId, sample, loadFinal]);
 
   /** Re-play the recorded event log compressed into `seconds` — offline demo of the swarm. */
-  const replay = useCallback(async (seconds = 25) => {
+  const replay = useCallback(async (seconds = 25, investigationOnly = false) => {
     if (!caseId) return;
     stopAll();
-    const [g, msgs] = await Promise.all([getCase(caseId), getEvents(caseId)]);
-    dispatch({ type: "init", graph: empty(g), mode: "replay" });
+    const [g, allMsgs] = await Promise.all([getCase(caseId), getEvents(caseId)]);
+    const msgs = investigationOnly ? allMsgs.filter((m) => m.type === "investigator") : allMsgs;
+    dispatch({ type: "init", graph: investigationOnly ? { ...g, investigation: null } : empty(g), mode: "replay" });
     if (!msgs.length) return;
     const t0 = msgs[0].ts ?? 0, t1 = msgs[msgs.length - 1].ts ?? 1;
     const span = Math.max(0.001, t1 - t0);

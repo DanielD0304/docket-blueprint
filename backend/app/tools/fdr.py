@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ..schemas import Anomaly, Citation, Event, Param, Series, SourceFile, TimeRef
+from ..schemas import Anomaly, AnomalyObservation, Citation, Event, Param, Series, SourceFile, TimeRef
 from .table import find_col, load_table, numeric, time_seconds
 
 # Discretes worth showing, most important first (others are skipped to keep the timeline readable).
@@ -163,7 +163,9 @@ def analyze_fdr(path: Path, sf: SourceFile, local_utc_offset_h: float = 0.0) -> 
                 expected=f"{col} within {'±' if r.test == 'abs_gt' else ('<' if r.test == 'gt' else '>')}{r.threshold}",
                 observed=f"{col} peaked at {float(v[peak_i]):.2f} for {tv[i1] - tv[i0]:.1f} s",
                 severity=r.severity, certainty="measured",  # type: ignore[arg-type]
-                citations=[cite(i0, i1, col, f"peak {float(v[peak_i]):.2f}")], source_files=[sf.file_id], verified=True))
+                citations=[cite(i0, i1, col, f"peak {float(v[peak_i]):.2f}")], source_files=[sf.file_id], verified=True,
+                observations=[AnomalyObservation(start_s=float(tv[i0]), end_s=float(tv[i1]),
+                             citations=[cite(i0, i1, col, f"peak {float(v[peak_i]):.2f}")])] if utc else []))
 
     # 3) profile series for the UI (on UTC when possible)
     series: list[Series] = []

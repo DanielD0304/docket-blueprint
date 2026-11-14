@@ -32,7 +32,7 @@ export function ADI({ pitch, roll, fpa, size = 120 }: { pitch: number; roll: num
     <svg className="adi" width={size} height={size} viewBox="-80 -80 160 160">
       <defs><clipPath id="adi-clip"><circle r={70} /></clipPath></defs>
       <g clipPath="url(#adi-clip)">
-        <g transform={`rotate(${-roll}) translate(0 ${clamp(pitch, -60, 60) * k})`}>
+        <g style={{ transform: `rotate(${-roll}deg) translateY(${clamp(pitch, -60, 60) * k}px)`, transition: "transform 350ms linear" }}>
           <rect x={-200} y={-400} width={400} height={400} fill="rgba(94,225,255,0.18)" />
           <rect x={-200} y={0} width={400} height={400} fill="rgba(255,181,71,0.16)" />
           <line x1={-200} x2={200} y1={0} y2={0} stroke="var(--ink)" strokeWidth={1.2} />
@@ -44,7 +44,7 @@ export function ADI({ pitch, roll, fpa, size = 120 }: { pitch: number; roll: num
           ))}
         </g>
         {fpa !== null && (
-          <g transform={`translate(0 ${clamp((pitch - fpa) * k, -60, 60)})`}>
+          <g style={{ transform: `translateY(${clamp((pitch - fpa) * k, -60, 60)}px)`, transition: "transform 350ms linear" }}>
             <circle r={4} fill="none" stroke="var(--accent)" strokeWidth={1.5} />
             <path d="M-10 0 L-4 0 M4 0 L10 0 M0 -4 L0 -9" stroke="var(--accent)" strokeWidth={1.5} />
           </g>
@@ -54,7 +54,7 @@ export function ADI({ pitch, roll, fpa, size = 120 }: { pitch: number; roll: num
       {[-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60].map((d) => (
         <line key={d} x1={0} x2={0} y1={-70} y2={d % 30 ? -65 : -60} stroke="var(--line)" transform={`rotate(${d})`} />
       ))}
-      <g transform={`rotate(${-roll})`}><path d="M0 -58 L-4 -50 L4 -50 Z" fill="var(--warn)" /></g>
+      <g style={{ transform: `rotate(${-roll}deg)`, transition: "transform 350ms linear" }}><path d="M0 -58 L-4 -50 L4 -50 Z" fill="var(--warn)" /></g>
       <path d="M-40 0 L-14 0 L-14 6 M40 0 L14 0 L14 6" fill="none" stroke="var(--warn)" strokeWidth={3} />
       <circle r={2.5} fill="var(--warn)" />
     </svg>

@@ -24,6 +24,12 @@ def anchor_mmss(graph: CaseGraph, mmss_files: set[str], track_file: str | None =
         if not own or not ref or len(own.points) < 20:
             report[fid] = "no reference altitude: hour left unresolved"
             continue
+        if fid in graph.clocks and own.clock_basis == "utc":
+            report[fid] = "already anchored"
+            continue
+        for s in graph.series:
+            if s.source_file == fid:
+                s.clock_basis = "unresolved"
         ts = np.array([p[0] for p in own.points]); alt = np.array([p[1] for p in own.points])
         best_k, best_err, n_best = None, float("inf"), 0
         for k in range(0, 24):
@@ -41,6 +47,7 @@ def anchor_mmss(graph: CaseGraph, mmss_files: set[str], track_file: str | None =
         for s in graph.series:
             if s.source_file == fid:
                 s.points = [(t + off, v) for t, v in s.points]
+                s.clock_basis = "utc"
         for e in graph.events:
             if e.source_files and e.source_files[0] == fid and e.time.t_s is not None and e.time.aligned_by == "mmss":
                 e.time.t_s += off

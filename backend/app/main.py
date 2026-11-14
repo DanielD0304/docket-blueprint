@@ -12,12 +12,14 @@ from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .config import MOCK_LLM, MODEL_FAST, MODEL_PRO
 from .ingest.unzip import safe_extract
 from .orchestrator import CaseRunner
+from .refuse import prepare_fusion_run
 from .schemas import CaseConfig
+from typing import Literal
 from .store import CaseStore, bus
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -105,6 +107,23 @@ def list_cases():
     return CaseStore.list_cases()
 
 
+class FusionRunRequest(BaseModel):
+    fusion: Literal["investigator", "linker"] = "investigator"
+    max_turns: int = Field(8, ge=2, le=20)
+
+
+@app.post("/api/cases/{case_id}/fusion-runs")
+async def create_fusion_run(case_id: str, body: FusionRunRequest):
+    target = f"{case_id[:80]}-{body.fusion}-{uuid.uuid4().hex[:6]}"
+    try:
+        prepare_fusion_run(case_id, target)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    runner = CaseRunner(target, fusion=body.fusion, max_turns=body.max_turns)
+    _tasks[target] = asyncio.create_task(runner.run(from_case=case_id))
+    return {"case_id": target}
+
+
 @app.get("/api/cases/{case_id}")
 def get_case(case_id: str):
     store = CaseStore(case_id)
@@ -131,27 +150,32 @@ async def stream(case_id: str):
         raise HTTPException(404)
 
     async def gen():
-        q = bus.subscribe(case_id)
-        last = 0
-        try:
+        # Tail the persisted log so CLI runs and API runs both stream live.
+        offset, idle = 0, 0
+        replay_done = False
+        while True:
+            sent = False
             if store.events_path.exists():
-                for line in store.events_path.read_text(encoding="utf-8").splitlines():
-                    if line.strip():
-                        msg = json.loads(line)
-                        last = max(last, msg.get("seq", 0))
-                        yield f"data: {line}\n\n"
-            yield 'data: {"type":"replay_done"}\n\n'
-            while True:
-                try:
-                    msg = await asyncio.wait_for(q.get(), timeout=15)
-                except asyncio.TimeoutError:
-                    yield ": keepalive\n\n"
-                    continue
-                if msg.get("seq", 0) <= last:
-                    continue
-                yield f"data: {json.dumps(msg, default=str)}\n\n"
-        finally:
-            bus.unsubscribe(case_id, q)
+                if store.events_path.stat().st_size < offset:
+                    offset = 0
+                with store.events_path.open("rb") as log_file:
+                    log_file.seek(offset)
+                    for _ in range(100):
+                        line = log_file.readline()
+                        if not line.endswith(b"\n"):
+                            break  # retry a partially-written record next poll
+                        offset = log_file.tell()
+                        if line.strip():
+                            yield f"data: {line.decode('utf-8').strip()}\n\n"
+                            sent = True
+            if not replay_done and (not store.events_path.exists() or offset >= store.events_path.stat().st_size):
+                yield 'data: {"type":"replay_done"}\n\n'
+                replay_done = True
+            idle = 0 if sent else idle + 1
+            if idle >= 50:
+                yield ": keepalive\n\n"
+                idle = 0
+            await asyncio.sleep(0.3)
 
     return StreamingResponse(gen(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

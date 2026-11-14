@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { fileUrl, fmtT } from "../api";
 import type { CaseGraph, Selection, SourceFile } from "../types";
 import type { LiveState } from "../useCase";
+import { Investigation } from "./Investigation";
 
 export interface SourceFocus { file_id: string; page?: number | null; media_s?: number | null }
 
@@ -24,6 +25,7 @@ export function Sources({ live, focus, setFocus, onSelect }: { live: LiveState; 
   return (
     <div className="sources">
       <div className="src-left">
+        <Investigation g={g} setFocus={setFocus} />
         <div className="src-stats">
           <div><span className="label">Files</span><b>{done}/{active}</b></div>
           <div><span className="label">Agents</span><b>{running}</b></div>
