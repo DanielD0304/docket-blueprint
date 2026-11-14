@@ -66,14 +66,14 @@ Deep links: `#case=<id>&t=<seconds UTC>&cam=chase|side|top|orbit&view=flight|pro
 ### 3. Demo case: Atlas Air 3591 (DCA19MA086)
 
 ```bash
-backend/.venv/Scripts/python scripts/fetch_docket.py DCA19MA086                 # 78 items, ~1.5 GB -> data/dockets/DCA19MA086
+backend/.venv/Scripts/python scripts/fetch_docket.py DCA19MA086                 # 78 items, ~1.5 GB -> <DATA_DIR>/dockets/DCA19MA086
 cd backend
-.venv/Scripts/python -m app.cli ../data/dockets/DCA19MA086 --title "Atlas Air 3591" --ntsb DCA19MA086 --date 2019-02-23 --aircraft "Boeing 767-375BCF" --offset -6
+.venv/Scripts/python -m app.cli DCA19MA086 --title "Atlas Air 3591" --ntsb DCA19MA086 --date 2019-02-23 --aircraft "Boeing 767-375BCF" --offset -6
 ```
 
-Or use the UI: **Analyse local folder** (the parameters are prefilled), or `POST /api/cases/local`. A full run with Gemini takes about 15–25 minutes: around 130 PDF chunks at roughly 50 s each, 14 in parallel, plus 7 media files. Results are cached per job in `data/cases/<id>/atoms/`, so **Rerun pipeline** reuses valid extraction caches and refreshes outdated recorder tools.
+Or use the UI: **Analyse local folder** (the parameters are prefilled), or `POST /api/cases/local`. A first full run with Gemini takes about 15 minutes: around 130 PDF chunks at roughly 50 s each, 32 agents in parallel (`MAX_CONCURRENCY`), plus 7 media files (the ATC audio alone takes about 15 minutes). Results are cached per job in `<DATA_DIR>/cases/<id>/atoms/`, so **Rerun pipeline** reuses valid extraction caches and refreshes outdated recorder tools. Gemini results are also shared across runs in `<DATA_DIR>/atom_cache/`, so a **new** run of an already analysed docket finishes extraction in under a minute.
 
-`data/` is git-ignored: dockets and case outputs stay local.
+**Data location:** dockets and case outputs live in `DATA_DIR`, which defaults to `~/DocketBlueprintData`. That keeps them outside the repo and outside synced folders like OneDrive. Set it in `backend/.env`. Short names like `DCA19MA086` resolve to `<DATA_DIR>/dockets/DCA19MA086` in the CLI and the UI.
 
 ### Re-run the investigator without re-extracting
 
@@ -179,7 +179,7 @@ docs/UI.md                UI requirements
 - 3D flight view with orbit controls in all camera modes, satellite/street basemap controls and time marks.
 - Layered causal graph and source chips on every item.
 
-**First full Gemini run on Atlas 3591** (local only, `data/` is not in git):
+**First full Gemini run on Atlas 3591** (local only, in `DATA_DIR`):
 - 25 min, 141 calls, about 2.6 M input tokens.
 - 1,668 events, 332 anomalies, 24 causal links, 3 hypotheses. The leading model explanation was inadvertent go-around → somatogravic illusion → nose-down inputs; its confidence was not calibrated.
 - The ATC audio was aligned to UTC through 3 anchors with 0.2 s spread.

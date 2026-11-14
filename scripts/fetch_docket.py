@@ -1,4 +1,4 @@
-"""Download a public NTSB docket into data/dockets/<NTSB number>/.
+"""Download a public NTSB docket into <DATA_DIR>/dockets/<NTSB number>/ (default ~/DocketBlueprintData).
 
 python scripts/fetch_docket.py DCA19MA086 [--skip-ext ppb,mp4] [--list]
 
@@ -47,6 +47,21 @@ def list_items(ntsb: str) -> list[dict]:
     return items
 
 
+def data_dir() -> Path:
+    """Same resolution as backend/app/config.py: DATA_DIR env / backend/.env, else ~/DocketBlueprintData.
+    Dockets are GBs — never put them inside the repo or a synced folder (OneDrive)."""
+    import os
+
+    backend = Path(__file__).resolve().parents[1] / "backend"
+    val = os.getenv("DATA_DIR")
+    env = backend / ".env"
+    if not val and env.exists():
+        for line in env.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("DATA_DIR="):
+                val = line.split("=", 1)[1].strip()
+    return (backend / val).resolve() if val else Path.home() / "DocketBlueprintData"
+
+
 def safe(s: str) -> str:
     s = s.replace("’", "'").encode("ascii", "ignore").decode()
     return re.sub(r'[<>:"/\\|?*]+', "_", s).strip()[:120]
@@ -59,8 +74,7 @@ def main() -> None:
     ap.add_argument("--skip-ext", default="")
     ap.add_argument("--list", action="store_true")
     a = ap.parse_args()
-    root = Path(__file__).resolve().parents[1]
-    out = Path(a.out) if a.out else root / "data" / "dockets" / a.ntsb
+    out = Path(a.out) if a.out else data_dir() / "dockets" / a.ntsb
     items = list_items(a.ntsb)
     if not items:
         sys.exit("No docket items found (page layout changed?)")

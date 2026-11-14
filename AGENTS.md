@@ -4,12 +4,12 @@ Read [README.md](README.md) first (run instructions, architecture), then [PLAN.m
 
 ## Ground rules
 
-* **Never commit secrets or data.** `backend/.env` (Gemini key), `data/` (dockets, case outputs) and `.claude/` are git-ignored. Run `git grep -n "AIza"` before pushing.
+* **Never commit secrets or data.** `backend/.env` (Gemini key) and `.claude/` are git-ignored. Dockets and case outputs live in `DATA_DIR` (default `~/DocketBlueprintData`), outside the repo and outside OneDrive. Keep them there: they are GBs. Run `git grep -n "AIza"` before pushing.
 * **Every atom needs a citation.** Extractors must return verbatim quotes with a page (PDF) or `media_time` (audio/video). Tool-generated atoms (FDR/ADS-B/radar) use `certainty="measured"` and pre-verified citations that name rows or lines. Don't add UI items without provenance.
 * **The LLM never does arithmetic on recorder data.** Numeric work belongs in `backend/app/tools/`.
 * **Schemas live in one place.** `backend/app/schemas.py` defines the models; `frontend/src/types.ts` mirrors them by hand. Change both together.
 * **Keep LLM-facing schemas simple** (no dicts or datetimes) so they work as Gemini `response_schema`.
-* **Synthetic data must stay labelled.** `frontend/src/sample.ts` is fake and shows a red banner. Never mix it into real cases. Test dockets belong outside `data/cases`.
+* **Synthetic data must stay labelled.** `frontend/src/sample.ts` is fake and shows a red banner. Never mix it into real cases. Test dockets belong outside `<DATA_DIR>/cases`.
 
 ## Dev loop
 
@@ -19,7 +19,7 @@ cd backend && .venv/Scripts/python -c "import app.main"
 MOCK_LLM=1 .venv/Scripts/python -m app.cli <folder> --case-id test-x    # free end-to-end run
 ```
 
-* Re-running a case reuses `data/cases/<id>/atoms/<job>.json`. Delete a job file to force re-extraction, or the mock suffix keeps mock and real caches apart.
+* Re-running a case reuses `<DATA_DIR>/cases/<id>/atoms/<job>.json`. Delete a job file to force re-extraction, or the mock suffix keeps mock and real caches apart.
 * `POST /api/cases/{id}/rerun` restarts the pipeline (fusion re-runs; extraction is cached).
 * For UI screenshots without a visible browser: Chrome headless with `--use-angle=swiftshader --virtual-time-budget=9000 --screenshot=...` against `#sample&t=...`. Live cases keep an SSE stream open, so headless won't finish: screenshot finished cases instead.
 

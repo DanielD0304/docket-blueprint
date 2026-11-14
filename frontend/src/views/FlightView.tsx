@@ -72,78 +72,114 @@ const tile2lat = (y: number, z: number) => { const n = Math.PI - (2 * Math.PI * 
 const lon2tile = (lon: number, z: number) => Math.floor(((lon + 180) / 360) * 2 ** z);
 const lat2tile = (lat: number, z: number) => Math.floor(((1 - Math.log(Math.tan((lat * Math.PI) / 180) + 1 / Math.cos((lat * Math.PI) / 180)) / Math.PI) / 2) * 2 ** z);
 
-/** OpenStreetMap standard tiles (no API key; CARTO now requires one) laid on the ground plane.
- * The shader inverts luminance so land goes dark and water / coastlines / roads / labels glow as blueprint linework;
- * additive blending lets the black drop out. Keep the tile count low (OSM tile usage policy). */
-function invertedMaterial(opacity: number) {
-  const mat = new THREE.MeshBasicMaterial({ color: 0xa9d4ff, transparent: true, opacity, depthWrite: false, blending: THREE.AdditiveBlending });
+/** Blueprint basemap from OpenStreetMap standard tiles (no API key; CARTO now requires one).
+ *
+ * Level-of-detail rings, all centred on the aircraft and updated incrementally from the render loop:
+ *   z14 8×8 (~19 km) · z12 6×6 (~58 km) · z10 6×6 (~230 km) · z7 6×6 (~1900 km)
+ * Tiles are opaque and drawn coarse → fine without depth test, so a finer tile simply covers the coarser one
+ * below it; while a fine tile is still loading, the coarse layer stays visible (no blank patches).
+ * The shader inverts luminance: land goes dark navy, water/coastlines/roads/labels light up as linework.
+ * Failed requests are retried with back-off; tiles leaving a ring are disposed. Keep the totals low (OSM tile policy). */
+const MAP_LEVELS = [{ z: 7, n: 6 }, { z: 10, n: 6 }, { z: 12, n: 6 }, { z: 14, n: 8 }];
+
+function blueprintMaterial() {
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, depthTest: false, depthWrite: false, transparent: false, visible: false });
   mat.onBeforeCompile = (shader) => {
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <map_fragment>",
       `#ifdef USE_MAP
         vec4 texel = texture2D( map, vMapUv );
-        float lum = dot( texel.rgb, vec3( 0.299, 0.587, 0.114 ) );
-        diffuseColor.rgb *= vec3( pow( clamp( 1.0 - lum, 0.0, 1.0 ), 1.4 ) );
+        vec3 s = pow( max( texel.rgb, vec3( 0.0 ) ), vec3( 1.0 / 2.2 ) );           // back to perceptual (sRGB) values
+        float lum = dot( s, vec3( 0.299, 0.587, 0.114 ) );
+        float sat = max( s.r, max( s.g, s.b ) ) - min( s.r, min( s.g, s.b ) );
+        float water = smoothstep( 0.05, 0.14, s.b - s.r );                          // OSM water is light blue
+        float ink = clamp( pow( clamp( 1.0 - lum, 0.0, 1.0 ), 1.5 ) * 1.3 + sat * 0.6 * ( 1.0 - water ), 0.0, 1.0 );
+        vec3 paper = vec3( 0.0034, 0.0168, 0.0545 );                                 // = #0a2342 (page background), linear
+        vec3 sea = vec3( 0.012, 0.075, 0.17 );
+        vec3 inkCol = vec3( 0.42, 0.66, 1.0 );
+        diffuseColor.rgb = mix( mix( paper, sea, water ), inkCol, ink );
       #endif`,
     );
   };
+  mat.customProgramCacheKey = () => "blueprint-map";
   return mat;
 }
 
+class MapLayers {
+  private tiles = new Map<string, THREE.Mesh>();
+  private centers = new Map<number, string>();
+  private loader = new THREE.TextureLoader();
+  private alive = true;
+  constructor(private group: THREE.Group, private ref: GeoRef) { this.loader.setCrossOrigin("anonymous"); }
 
-type Basemap = "satellite" | "streets";
-type TileMesh = THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-const tileLayers = new WeakMap<THREE.Group, { key: string; tiles: Map<string, TileMesh> }>();
-function releaseTile(tile: TileMesh) {
-  tile.removeFromParent(); tile.geometry.dispose(); tile.material.map?.dispose(); tile.material.dispose();
-}
-function clearTiles(group: THREE.Group) {
-  tileLayers.get(group)?.tiles.forEach(releaseTile);
-  tileLayers.delete(group);
-  group.clear();
-}
+  last: [number, number] | null = null;
 
-/** Raster basemaps laid on the ground plane.
- * TextureLoader uses normal browser image requests: the persistent HTTP cache honours
- * provider Cache-Control/Expires and conditionally revalidates expired tiles (ETag/Last-Modified).
- * Keep URLs stable; do not add cache busters or bypass the browser cache.
- */
-function addTiles(group: THREE.Group, ref: GeoRef, box: [number, number, number, number], zoom: number, y: number, opacity: number, basemap: Basemap, maxTiles = 64, onError?: () => void, tileRange?: [number, number, number, number]) {
-  const [latMin, latMax, lonMin, lonMax] = box;
-  const [x0, x1, y0, y1] = tileRange ?? [lon2tile(lonMin, zoom), lon2tile(lonMax, zoom), lat2tile(latMax, zoom), lat2tile(latMin, zoom)];
-  if ((x1 - x0 + 1) * (y1 - y0 + 1) > maxTiles) return;
-  const key = `${basemap}/${zoom}/${ref.lat0}/${ref.lon0}/${ref.k}/${y}/${opacity}`;
-  if (tileLayers.get(group)?.key !== key) {
-    clearTiles(group);
-    tileLayers.set(group, { key, tiles: new Map() });
+  update(lat: number, lon: number) {
+    if (!isFinite(lat) || !isFinite(lon)) return; // never lock a ring onto a NaN centre
+    this.last = [lat, lon];
+    MAP_LEVELS.forEach(({ z, n }, li) => {
+      const cx = lon2tile(lon, z), cy = lat2tile(lat, z);
+      const key = `${cx}/${cy}`;
+      if (this.centers.get(z) === key) return;
+      this.centers.set(z, key);
+      const want = new Set<string>();
+      const h = Math.floor(n / 2);
+      for (let tx = cx - h; tx < cx - h + n; tx++) for (let ty = cy - h; ty < cy - h + n; ty++) want.add(`${z}/${tx}/${ty}`);
+      // drop tiles of this level that left the ring
+      for (const [k, m] of this.tiles) if (k.startsWith(`${z}/`) && !want.has(k)) this.drop(k, m);
+      // add missing ones
+      for (const k of want) if (!this.tiles.has(k)) this.add(k, li);
+    });
   }
-  const tiles = tileLayers.get(group)!.tiles;
-  for (const [id, tile] of tiles) {
-    const [tx, ty] = id.split("/").map(Number);
-    if (tx < x0 || tx > x1 || ty < y0 || ty > y1) { releaseTile(tile); tiles.delete(id); }
-  }
-  const loader = new THREE.TextureLoader();
-  loader.setCrossOrigin("anonymous");
-  for (let tx = x0; tx <= x1; tx++) for (let ty = y0; ty <= y1; ty++) {
-    const id = `${tx}/${ty}`;
-    if (tiles.has(id)) continue;
-    const nw = toScene(ref, tile2lat(ty, zoom), tile2lon(tx, zoom)), se = toScene(ref, tile2lat(ty + 1, zoom), tile2lon(tx + 1, zoom));
-    const mat = basemap === "streets" ? invertedMaterial(opacity) : new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity, depthWrite: false });
-    const url = basemap === "satellite"
-      ? `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless_3857/default/g/${zoom}/${ty}/${tx}.jpg`
-      : `https://tile.openstreetmap.org/${zoom}/${tx}/${ty}.png`;
+
+  private add(k: string, layerIndex: number) {
+    const [z, tx, ty] = k.split("/").map(Number);
+    const nw = toScene(this.ref, tile2lat(ty, z), tile2lon(tx, z)), se = toScene(this.ref, tile2lat(ty + 1, z), tile2lon(tx + 1, z));
+    const mat = blueprintMaterial();
     const m = new THREE.Mesh(new THREE.PlaneGeometry(se.x - nw.x, se.z - nw.z).rotateX(-Math.PI / 2), mat);
-    m.position.set((nw.x + se.x) / 2, y, (nw.z + se.z) / 2);
-    // An unloaded tile must not draw a solid rectangle over the basemap below it.
-    m.visible = false;
-    loader.load(url, (tex) => {
-      if (m.parent !== group) { tex.dispose(); return; }
-      tex.colorSpace = THREE.SRGBColorSpace;
-      mat.map = tex; mat.needsUpdate = true; m.visible = true;
-    }, undefined, () => onError?.());
-    m.renderOrder = -1;
-    group.add(m);
-    tiles.set(id, m);
+    m.position.set((nw.x + se.x) / 2, 0, (nw.z + se.z) / 2);
+    m.renderOrder = -100 + layerIndex; // coarse first, fine last → fine covers coarse
+    m.frustumCulled = false;
+    this.group.add(m);
+    this.tiles.set(k, m);
+    const load = (attempt: number) => this.loader.load(
+      `https://tile.openstreetmap.org/${z}/${tx}/${ty}.png`,
+      (tex) => {
+        if (!this.alive || this.tiles.get(k) !== m) { tex.dispose(); return; }
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.anisotropy = 4;
+        mat.map = tex; mat.visible = true; mat.needsUpdate = true;
+      },
+      undefined,
+      () => { if (attempt < 3 && this.alive && this.tiles.get(k) === m) setTimeout(() => load(attempt + 1), 800 * 2 ** attempt); },
+    );
+    load(0);
+  }
+
+  private drop(k: string, m: THREE.Mesh) {
+    this.group.remove(m);
+    m.geometry.dispose();
+    const mat = m.material as THREE.MeshBasicMaterial;
+    mat.map?.dispose(); mat.dispose();
+    this.tiles.delete(k);
+  }
+
+  /** Debug: tiles per zoom and how many have a loaded texture. */
+  stats() {
+    const out: Record<string, { tiles: number; loaded: number }> = {};
+    for (const [k, m] of this.tiles) {
+      const z = k.split("/")[0];
+      out[z] ??= { tiles: 0, loaded: 0 };
+      out[z].tiles++;
+      if ((m.material as THREE.MeshBasicMaterial).map) out[z].loaded++;
+    }
+    return out;
+  }
+
+  dispose() {
+    this.alive = false;
+    for (const [k, m] of this.tiles) this.drop(k, m);
+    this.centers.clear();
   }
 }
 
@@ -284,10 +320,13 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
   const di = useMemo(() => discreteIndex(g.events), [g.events]);
   const zones = useMemo(() => byZone(g), [g]);
   const roles = useMemo(() => new Map(g.files.map((x) => [x.file_id, x.role])), [g.files]);
-  const { pts, source, ref: geo } = useMemo(() => buildPath(g, sm), [g, sm]);
+  const { pts, source, ref: geoRaw } = useMemo(() => buildPath(g, sm), [g, sm]);
+  // buildPath returns a new object on every graph update (once a second while a run streams in).
+  // The map layers are keyed on geo, so keep it stable by VALUE; otherwise every live update throws
+  // away all tiles and restarts loading, and the map never appears during a running analysis.
+  const geoKey = geoRaw ? `${geoRaw.lat0}|${geoRaw.lon0}|${geoRaw.k}` : "";
+  const geo = useMemo(() => geoRaw, [geoKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const [mapOn, setMapOn] = useState(true);
-  const [basemap, setBasemap] = useState<Basemap>("satellite");
-  const [tileError, setTileError] = useState(false);
   const [showContext, setShowContext] = useState(false);
   const tEnd = pts.length ? pts[pts.length - 1].t : (cursor ?? 0);
   const t = cursor ?? tEnd;
@@ -369,13 +408,13 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
   const wrap = useRef<HTMLDivElement>(null);
   const mount = useRef<HTMLDivElement>(null);
   const overlay = useRef<SVGSVGElement>(null);
-  const live = useRef({ t, cam, pts, hoverZone, alarmZones, gearUp, pitch, roll, hoverAn, speed, heading });
-  live.current = { t, cam, pts, hoverZone, alarmZones, gearUp, pitch, roll, hoverAn, speed, heading };
+  const live = useRef({ t, cam, pts, hoverZone, alarmZones, gearUp, pitch, roll, hoverAn, speed, heading, geo });
+  live.current = { t, cam, pts, hoverZone, alarmZones, gearUp, pitch, roll, hoverAn, speed, heading, geo };
   const cardEls = useRef(new Map<string, { el: HTMLElement; zone: ZoneId; side: "l" | "r" }>());
   const tagEls = useRef(new Map<string, { el: HTMLElement; zone: ZoneId; slot: number }>());
   const lineEls = useRef(new Map<string, SVGPathElement>());
   const linkEls = useRef(new Map<string, SVGPathElement>());
-  const scene3 = useRef<{ scene: THREE.Scene; flown: THREE.Line; markers: THREE.Group; pathGroup: THREE.Group; ground: THREE.Group; labels: THREE.Group; detail: THREE.Group } | null>(null);
+  const scene3 = useRef<{ scene: THREE.Scene; flown: THREE.Line; markers: THREE.Group; pathGroup: THREE.Group; ground: THREE.Group; labels: THREE.Group; map: MapLayers | null } | null>(null);
 
   useEffect(() => {
     const el = mount.current!, ov = overlay.current!;
@@ -383,7 +422,7 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
     renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
     el.appendChild(renderer.domElement);
     const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0x0a2342, 4000, 90000);
+    scene.fog = new THREE.Fog(0x0a2342, 20000, 300000);
     const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 400000);
     // Orbit controls in every mode: the target follows the aircraft, the user rotates / zooms around it.
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -398,7 +437,6 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
     big.position.y = 0.5;
     scene.add(big);
     const ground = new THREE.Group(); scene.add(ground);
-    const detail = new THREE.Group(); scene.add(detail);
     const labels = new THREE.Group(); scene.add(labels);
     const fine = new THREE.GridHelper(4000, 40, C.gridFine, C.gridFine);
     (fine.material as THREE.Material).transparent = true; (fine.material as THREE.Material).opacity = 0.35;
@@ -413,7 +451,7 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
     scene.add(shadow);
     const drop = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]), new THREE.LineDashedMaterial({ color: C.warn, dashSize: 30, gapSize: 20 }));
     scene.add(drop);
-    scene3.current = { scene, flown, markers, pathGroup, ground, labels, detail };
+    scene3.current = { scene, flown, markers, pathGroup, ground, labels, map: null };
 
     const ro = new ResizeObserver(() => {
       const w = el.clientWidth, h = el.clientHeight;
@@ -459,6 +497,9 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
       drop.computeLineDistances();
       fine.position.set(Math.round(pos.x / 100) * 100, 0.2, Math.round(pos.z / 100) * 100);
       if (pose) flown.geometry.setDrawRange(0, pose.idx + 1);
+      // keep the map rings centred on the aircraft (cheap: only changes when a tile boundary is crossed)
+      const map = scene3.current?.map;
+      if (map && L.geo && frame % 10 === 0) map.update(L.geo.lat0 - pos.z / 110540, L.geo.lon0 + pos.x / (L.geo.k * 111320));
 
       // part colours: alarm (blinking red) > hover > normal
       const blink = Math.floor(frame / 20) % 2 === 0;
@@ -567,7 +608,7 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
       });
     };
     loop();
-    return () => { cancelAnimationFrame(raf); ro.disconnect(); clearTiles(ground); clearTiles(detail); renderer.dispose(); el.removeChild(renderer.domElement); };
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); scene3.current?.map?.dispose(); renderer.dispose(); el.removeChild(renderer.domElement); };
   }, []);
 
   // path + anomaly markers
@@ -614,37 +655,25 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
     }
   }, [pts, g.anomalies]);
 
-  // ground: basemap tiles — overview of the whole route + detail around the final position
+  // ground map: one MapLayers instance per (geo reference, map toggle); the render loop recentres it on the aircraft
+  const aircraftLatLon = (): [number, number] | null => {
+    const p = geo && pts.length ? poseAt(pts, t)?.pos : null;
+    return p && geo ? [geo.lat0 - p.z / 110540, geo.lon0 + p.x / (geo.k * 111320)] : null;
+  };
   useEffect(() => {
-    const s = scene3.current; if (!s) return;
-    setTileError(false);
-    let active = true;
-    const onTileError = () => { if (active) setTileError(true); };
-    if (!mapOn || !geo || pts.length < 2) { clearTiles(s.ground); return; }
-    const lats = g.track.map((p) => p.lat), lons = g.track.map((p) => p.lon);
-    const pad = 0.4;
-    const box: [number, number, number, number] = [Math.min(...lats) - pad, Math.max(...lats) + pad, Math.min(...lons) - pad, Math.max(...lons) + pad];
-    const zOver = [9, 8, 7, 6, 5, 4].find((z) => (lon2tile(box[3], z) - lon2tile(box[2], z) + 1) * (lat2tile(box[0], z) - lat2tile(box[1], z) + 1) <= 48) ?? 4;
-    addTiles(s.ground, geo, box, zOver, -1, 0.9, basemap, 64, onTileError);
-    return () => { active = false; };
-  }, [mapOn, basemap, geo, pts.length, g.track]);
-
-  // Fixed zoom in geographic coordinates: camera presets never change coverage
-  // or resolution. Keep overlapping tiles when the aircraft crosses a tile.
-  const DETAIL_Z = 14;
-  const here = geo && pts.length ? poseAt(pts, t)?.pos : null;
-  const hereLat = here && geo ? geo.lat0 - here.z / 110540 : null;
-  const hereLon = here && geo ? geo.lon0 + here.x / (geo.k * 111320) : null;
-  const tileKey = hereLat !== null && hereLon !== null ? `${lon2tile(hereLon, DETAIL_Z)}/${lat2tile(hereLat, DETAIL_Z)}` : "";
+    const s = scene3.current; if (!s || !mapOn || !geo) return;
+    const layers = new MapLayers(s.ground, geo);
+    s.map = layers;
+    const ll = aircraftLatLon();
+    if (ll) layers.update(...ll); // load immediately — don't wait for the render loop
+    if (import.meta.env.DEV) (window as any).__mapLayers = layers; // debug: window.__mapLayers.stats()
+    return () => { layers.dispose(); if (s.map === layers) s.map = null; };
+  }, [mapOn, geo]); // eslint-disable-line react-hooks/exhaustive-deps
+  // follow the playhead (also when the render loop is throttled, e.g. background tab)
   useEffect(() => {
-    const s = scene3.current; if (!s) return;
-    if (!mapOn || !geo || !tileKey) { clearTiles(s.detail); return; }
-    const [tx, ty] = tileKey.split("/").map(Number);
-    const half = basemap === "satellite" ? 16 : 4;
-    // Integer tile bounds avoid floating-point round-trip errors dropping a row.
-    addTiles(s.detail, geo, [0, 0, 0, 0], DETAIL_Z, 1, 0.9, basemap, (half * 2) ** 2,
-      () => setTileError(true), [tx - half + 1, tx + half, ty - half + 1, ty + half]);
-  }, [mapOn, basemap, geo, tileKey]);
+    const ll = aircraftLatLon();
+    if (ll) scene3.current?.map?.update(...ll);
+  }, [t]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ------------------------------------------------------------------ render overlay
   const tagSlots = new Map<ZoneId, number>();
@@ -672,16 +701,11 @@ export function FlightView({ g, cursor, selected, onSelect, speed = 1 }: Props) 
       <div className="cam-bar">
         {CAMS.map(([k, lbl]) => <button key={k} className={`btn ${cam === k ? "active" : ""}`} onClick={() => setCam(k)}>{lbl}</button>)}
         <button className={`btn ${mapOn ? "active" : ""}`} onClick={() => setMapOn(!mapOn)} title="Basemap tiles on the ground">Map</button>
-        {mapOn && <button className="btn" onClick={() => setBasemap(basemap === "satellite" ? "streets" : "satellite")}
-          title="Switch between satellite imagery and OpenStreetMap streets">{basemap === "satellite" ? "Satellite" : "Streets"}</button>}
         <button className={`btn ${showContext ? "active" : ""}`} onClick={() => setShowContext(!showContext)}
           title="Include retrospective claims and untimed findings. These are context, not flight states at the playhead.">Context</button>
-        {mapOn && tileError && <span role="status" style={{ color: "var(--warn)" }}>Some map tiles failed to load{basemap === "satellite" ? " · try Streets" : ""}</span>}
         <span className="label" style={{ marginLeft: 8 }}>path: {source}</span>
       </div>
-      {mapOn && geo && <div className="attrib">{basemap === "satellite" ? <>
-        <a href="https://maps.eox.at/" target="_blank" rel="noreferrer">EOX::Maps</a> · <a href="https://cloudless.eox.at/" target="_blank" rel="noreferrer">EOxCloudless</a> by EOX IT Services GmbH · Contains modified Copernicus Sentinel data 2016 · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>
-      </> : <>© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a></>} · drag to orbit · scroll to zoom</div>}
+      {mapOn && geo && <div className="attrib">© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap contributors</a> · drag to orbit · scroll to zoom</div>}
 
       {/* left column: HUD + voices */}
       <div className="col left">

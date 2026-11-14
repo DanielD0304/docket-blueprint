@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from .config import MOCK_LLM, MODEL_FAST, MODEL_PRO, DEMO_MODE, DEMO_CASE_ID
+from .config import CASES_DIR, DATA_DIR, DEMO_CASE_ID, DEMO_MODE, DOCKETS_DIR, MOCK_LLM, MODEL_FAST, MODEL_PRO
 from .ingest.unzip import safe_extract
 from .fusion.clock_anchor import resolve_live_clocks
 from .orchestrator import CaseRunner
@@ -30,6 +30,40 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 _tasks: dict[str, asyncio.Task] = {}
 
 
+@app.on_event("startup")
+def _mark_interrupted_runs() -> None:
+    """A server restart kills running pipelines. Without this, their cases stay "running" forever and the UI
+    keeps counting their open jobs as active agents. Close those jobs and mark the case interrupted;
+    "Re-run" resumes from the per-job cache."""
+    for d in CASES_DIR.iterdir() if CASES_DIR.exists() else []:
+        store = CaseStore(d.name)
+        if not store.meta_path.exists():
+            continue
+        g = store.load_graph()
+        # "running": killed hard (no chance to save). "error ... interrupted": the orchestrator's own
+        # CancelledError handler saved the status on a clean shutdown, but job events may still be open.
+        interrupted_cleanly = bool(g) and g.status == "error" and "interrupt" in str(g.stats.get("error", "")).lower()
+        if not g or (g.status != "running" and not interrupted_cleanly):
+            continue
+        open_jobs: dict[str, dict] = {}
+        if store.events_path.exists():
+            for line in store.events_path.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    m = json.loads(line)
+                    if m.get("type") == "job":
+                        open_jobs[m["job_id"]] = m
+        still_open = [(job_id, m) for job_id, m in open_jobs.items() if m.get("status") == "running"]
+        for job_id, m in still_open:
+            bus.publish(d.name, "job", job_id=job_id, file_id=m.get("file_id"), status="interrupted")
+        if interrupted_cleanly:
+            continue  # status already persisted by the orchestrator
+        g.status, g.stage = "error", "interrupted"
+        g.stats["error"] = "interrupted by a backend restart; use Re-run (finished jobs are reused from the cache)"
+        store.save_graph(g)
+        bus.publish(d.name, "error", error=g.stats["error"])
+        logging.getLogger(__name__).warning("case %s was interrupted by a restart; marked as such", d.name)
+
+
 def _new_case_id(cfg: CaseConfig) -> str:
     base = re.sub(r"[^A-Za-z0-9]+", "-", cfg.ntsb_id or "case").strip("-")
     return f"{base}-{uuid.uuid4().hex[:6]}"
@@ -43,7 +77,8 @@ def _start(case_id: str) -> None:
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "mock": MOCK_LLM, "demo": DEMO_MODE, "demo_case_id": DEMO_CASE_ID if DEMO_MODE else None, "models": {"fast": MODEL_FAST, "pro": MODEL_PRO}}
+    return {"ok": True, "mock": MOCK_LLM, "demo": DEMO_MODE, "demo_case_id": DEMO_CASE_ID if DEMO_MODE else None,
+            "models": {"fast": MODEL_FAST, "pro": MODEL_PRO}, "data_dir": str(DATA_DIR)}
 
 
 def _demo_intake():
@@ -95,7 +130,10 @@ async def create_local_case(body: LocalCase):
     """Point at an already-downloaded docket folder (no copy). Handy for the 1 GB+ dockets."""
     if DEMO_MODE:
         return _demo_intake()
-    p = Path(body.path).expanduser().resolve()
+    p = Path(body.path).expanduser()
+    if not p.is_absolute():  # short names like "DCA19MA086" are looked up in DATA_DIR/dockets
+        p = DOCKETS_DIR / p if (DOCKETS_DIR / p).is_dir() else p
+    p = p.resolve()
     if not p.is_dir():
         raise HTTPException(400, f"not a directory: {p}")
     case_id = _new_case_id(body.config)

@@ -55,12 +55,40 @@ export async function investigateCase(id: string): Promise<string> {
   return (await r.json()).case_id;
 }
 
+/** Live progress stream with automatic reconnect.
+ * EventSource only retries network errors; when the backend restarts behind the Vite proxy the proxy
+ * answers with an HTTP error and the browser closes the stream for good, freezing the UI. We reopen it
+ * ourselves (with back-off). The server replays the whole event log on every connect, so messages whose
+ * seq we already delivered are skipped; seq numbers stay monotonic across reruns and restarts. */
 export function openStream(id: string, onMsg: (m: StreamMsg) => void): () => void {
-  const es = new EventSource(`/api/cases/${id}/stream`);
-  es.onmessage = (e) => {
-    try { onMsg(JSON.parse(e.data)); } catch { /* ignore */ }
+  let es: EventSource | null = null;
+  let lastSeq = 0;
+  let closed = false;
+  let retry = 0;
+  let timer: number | undefined;
+  const connect = () => {
+    if (closed) return;
+    es = new EventSource(`/api/cases/${id}/stream`);
+    es.onopen = () => { retry = 0; };
+    es.onmessage = (e) => {
+      let m: StreamMsg;
+      try { m = JSON.parse(e.data); } catch { return; }
+      if (typeof m.seq === "number") {
+        if (m.seq <= lastSeq) return; // already delivered before a reconnect
+        lastSeq = m.seq;
+      }
+      onMsg(m);
+    };
+    es.onerror = () => {
+      if (es && es.readyState === EventSource.CLOSED) {
+        es.close();
+        retry++;
+        timer = window.setTimeout(connect, Math.min(15000, 1000 * 2 ** Math.min(retry, 4)));
+      }
+    };
   };
-  return () => es.close();
+  connect();
+  return () => { closed = true; window.clearTimeout(timer); es?.close(); };
 }
 
 export const fileUrl = (caseId: string, fileId: string, page?: number | null) =>
