@@ -48,7 +48,7 @@ cp .env.example .env                                         # set GEMINI_API_KE
 
 Without `GEMINI_API_KEY` (or with `MOCK_LLM=1`) the backend runs a **mock extractor**. It is regex based but works on the real document text, so the full pipeline and UI run offline. It adds no cost.
 
-Models: the hackathon key exposes `gemini-4-argon`, `gemini-4-carbon` and `gemini-4-hydrogen`. Defaults are `GEMINI_MODEL_FAST=gemini-4-hydrogen` (fastest in a quick test) and `GEMINI_MODEL_PRO=gemini-4-argon`. The codenames don't say which is which, so this is a guess.
+Models: set `GEMINI_MODEL_FAST` (triage, images) and `GEMINI_MODEL_PRO` (heavier extraction) in `.env` to Gemini models your key can access.
 
 ### 2. Frontend (Node 22.18+; tests import .ts directly)
 
@@ -60,10 +60,6 @@ npm run dev          # http://localhost:5173, proxies /api -> :8000
 
 If port 8000 is occupied, start the backend with `--port 8001` and run
 `DOCKET_API_URL=http://127.0.0.1:8001 npm run dev` from `frontend` (Mac/Linux).
-
-On this NixOS checkout, `source backend/.venv/bin/activate` from the repository
-root also enables the installed Node runtime and the native libraries needed by
-NumPy. Run this in each terminal before starting either service.
 
 `http://localhost:5173/#sample` opens **synthetic demo data** (marked with a red banner) for UI work without a backend.
 

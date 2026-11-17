@@ -7,8 +7,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BACKEND_DIR / ".env")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY") or ""
-MODEL_FAST = os.getenv("GEMINI_MODEL_FAST", "gemini-4-hydrogen")
-MODEL_PRO = os.getenv("GEMINI_MODEL_PRO", "gemini-4-argon")
+MODEL_FAST = os.getenv("GEMINI_MODEL_FAST", "")
+MODEL_PRO = os.getenv("GEMINI_MODEL_PRO", "")
 
 # Number of parallel extractor agents (job workers) and the cap on simultaneous Gemini calls.
 MAX_CONCURRENCY = int(os.getenv("MAX_CONCURRENCY", "32"))
