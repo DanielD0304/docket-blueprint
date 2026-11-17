@@ -28,6 +28,8 @@ flowchart LR
   E --> F[Timeline, hypotheses and animated graph]
 ```
 
+> **Hackathon finalist.** Docket Blueprint was built at the TechEurope × Google DeepMind Hackathon in Karlsruhe (open innovation with the new Gemini models) and was one of the 5 finalist projects. Our team of four started with two ideas and split up to build both; the sister project, [AidForge](https://github.com/LivienMajer/aidforge), turns a photo of an everyday problem into a print-ready assistive device and also reached the final.
+
 ---
 
 ## Quick start
