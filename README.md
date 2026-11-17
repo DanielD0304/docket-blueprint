@@ -2,6 +2,8 @@
 
 [![CI](https://github.com/DanielD0304/docket-blueprint/actions/workflows/ci.yml/badge.svg)](https://github.com/DanielD0304/docket-blueprint/actions/workflows/ci.yml)
 
+Built at the {Tech: Europe} Agentic AI Hack 2026 in Karlsruhe (3rd place).
+
 Turn a public NTSB docket into a cited timeline, recorder analysis and competing accident explanations. Gemini extracts document and media evidence; Python analyzes flight data; an investigator team researches relationships through read-only tools. Every finding remains inspectable through its source citation.
 
 ![Docket Blueprint — recorded investigation unfolding as a moving graph](docs/images/investigation.gif)
